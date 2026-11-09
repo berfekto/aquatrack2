@@ -1097,13 +1097,15 @@ export function HRDashboardView() {
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsHireAssistantModalOpen(true)}
-                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>+ إضافة مساعد مدرب</span>
-              </button>
+              {(currentUser?.role === 'super_admin' || currentUser?.role === 'hr' || currentUser?.role === 'admin') && (
+                <button
+                  onClick={() => setIsHireAssistantModalOpen(true)}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>+ إضافة مساعد مدرب / كابتن</span>
+                </button>
+              )}
               <button
                 onClick={() => setIsNewTaskModalOpen(true)}
                 className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-sky-600/30 transition-all cursor-pointer"
@@ -1811,6 +1813,16 @@ export function HRDashboardView() {
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
               />
             </div>
+          </div>
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">كلمة المرور للدخول (اختياري، الافتراضي: 123456)</label>
+            <input
+              type="text"
+              value={hireForm.password}
+              onChange={e => setHireForm({ ...hireForm, password: e.target.value })}
+              placeholder="اتركه فارغاً لاستخدام 123456"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+            />
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
             <button

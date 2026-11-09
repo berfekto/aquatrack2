@@ -97,9 +97,17 @@ export async function POST(req: NextRequest) {
       return response;
     }
 
-    // 3. Register Staff User (Strictly staff: HR, Coach, Assistant)
+    // 3. Register Staff User (Strictly restricted to HR and Super Admin / Manager)
     if (body.action === 'register-staff') {
-      const { name, phone, email, role, title, password } = body;
+      const { name, phone, email, role, title, password, createdByUserId } = body;
+
+      const creator = createdByUserId ? getUserById(createdByUserId) : null;
+      if (!creator || !['super_admin', 'admin', 'hr'].includes(creator.role)) {
+        return NextResponse.json(
+          { success: false, error: 'غير مصرح: إضافة الموظفين والمدربين والمساعدين متاحة فقط للمدير العام ومسؤول HR' },
+          { status: 403 }
+        );
+      }
 
       if (!name || !name.trim()) {
         return NextResponse.json({ success: false, error: 'اسم الموظف مطلوب' }, { status: 400 });
@@ -123,24 +131,13 @@ export async function POST(req: NextRequest) {
         password,
       });
 
-      const token = createSessionToken(newUser.id, newUser.role, newUser.name);
       const { password: _, ...safeUser } = newUser;
 
-      const response = NextResponse.json({
+      return NextResponse.json({
         success: true,
         user: safeUser,
-        token,
-        message: 'تم تسجيل الموظف بنجاح في المنظومة'
+        message: 'تم تسجيل الموظف بنجاح بواسطة الإدارة'
       });
-      response.cookies.set('aquapro_session', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: 30 * 24 * 60 * 60,
-      });
-
-      return response;
     }
 
     // Logout

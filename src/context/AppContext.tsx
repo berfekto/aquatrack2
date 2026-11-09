@@ -215,11 +215,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     title?: string;
     password?: string;
   }) => {
+    if (!currentUser || !['super_admin', 'admin', 'hr'].includes(currentUser.role)) {
+      return { success: false, error: 'غير مصرح: فقط المدير العام أو مسؤول HR يمكنه إضافة موظف جديد' };
+    }
     try {
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'register-staff', ...data }),
+        body: JSON.stringify({
+          action: 'register-staff',
+          createdByUserId: currentUser.id,
+          ...data,
+        }),
       });
       const resData = await res.json();
       if (resData.success && resData.user) {
