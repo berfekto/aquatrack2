@@ -1,0 +1,26 @@
+{
+  "name": "أكوا برو | إدارة الأكاديميات والمسابح",
+  "short_name": "أكوا برو",
+  "description": "تطبيق إدارة أكاديميات السباحة، الموظفين، جدول الحصص، الحضور والاشتراكات",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0284c7",
+  "orientation": "portrait-primary",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
