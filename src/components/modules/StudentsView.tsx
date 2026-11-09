@@ -57,6 +57,7 @@ export function StudentsView() {
   const [editFormData, setEditFormData] = useState({
     id: '',
     name: '',
+    avatar: '',
     academy_id: 'acad-1',
     group_id: '',
     coach_id: '',
@@ -73,6 +74,39 @@ export function StudentsView() {
   });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
+
+  const handleCompressStudentPhoto = (file: File, onDone: (url: string) => void) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxSize = 260;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > maxSize) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          onDone(canvas.toDataURL('image/jpeg', 0.82));
+        }
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   // GM Swimmer Assessment & Directives State
   const [isAssessmentModalOpen, setIsAssessmentModalOpen] = useState(false);
@@ -96,6 +130,7 @@ export function StudentsView() {
     group_id: '',
     coach_id: 'staff-1',
     name: '',
+    avatar: '',
     birth_date: '2014-05-15',
     gender: 'male' as 'male' | 'female',
     parent_name: '',
@@ -197,6 +232,7 @@ export function StudentsView() {
     setEditFormData({
       id: student.id,
       name: student.name,
+      avatar: student.avatar || '',
       academy_id: student.academy_id,
       group_id: student.group_id || '',
       coach_id: student.coach_id || '',
@@ -400,9 +436,17 @@ export function StudentsView() {
               <div>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-sky-400 to-cyan-500 text-white font-bold flex items-center justify-center text-sm shadow-xs">
-                      {student.name.charAt(0)}
-                    </div>
+                    {student.avatar ? (
+                      <img
+                        src={student.avatar}
+                        alt={student.name}
+                        className="w-11 h-11 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
+                      />
+                    ) : (
+                      <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-sky-400 to-cyan-500 text-white font-bold flex items-center justify-center text-sm shadow-xs">
+                        {student.name.charAt(0)}
+                      </div>
+                    )}
                     <div>
                       <h3 className="font-bold text-sm text-slate-900">{student.name}</h3>
                       <div className="flex items-center gap-2 mt-0.5">
@@ -549,6 +593,29 @@ export function StudentsView() {
         maxWidth="lg"
       >
         <form onSubmit={handleCreateStudent} className="space-y-4 text-xs">
+          {/* Swimmer Photo Upload */}
+          <div className="p-3 bg-sky-50/70 border border-sky-100 rounded-2xl flex items-center gap-3">
+            <img
+              src={formData.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+              alt="صورة اللاعب"
+              className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-sm shrink-0"
+            />
+            <div className="flex-1">
+              <label className="block font-bold text-slate-800 mb-1">صورة السباح الشخصية</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    handleCompressStudentPhoto(file, url => setFormData(prev => ({ ...prev, avatar: url })));
+                  }
+                }}
+                className="text-xs text-slate-600 file:mr-0 file:ml-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-sky-600 file:text-white hover:file:bg-sky-500 cursor-pointer"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-slate-700 font-bold mb-1">اسم الطالب بالكامل</label>
@@ -869,7 +936,29 @@ export function StudentsView() {
             </div>
           )}
 
-          {/* Personal Info */}
+          {/* Personal Info & Photo */}
+          <div className="p-3 bg-sky-50/70 border border-sky-100 rounded-2xl flex items-center gap-3">
+            <img
+              src={editFormData.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+              alt="صورة اللاعب"
+              className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-sm shrink-0"
+            />
+            <div className="flex-1">
+              <label className="block font-bold text-slate-800 mb-1">تحديث صورة السباح الشخصية</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    handleCompressStudentPhoto(file, url => setEditFormData(prev => ({ ...prev, avatar: url })));
+                  }
+                }}
+                className="text-xs text-slate-600 file:mr-0 file:ml-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-sky-600 file:text-white hover:file:bg-sky-500 cursor-pointer"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-slate-700 font-bold mb-1">اسم السباح بالكامل</label>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   Users,
@@ -23,20 +23,82 @@ import {
   Award,
   ShieldAlert,
   BookOpen,
-  ArrowUpDown,
   RefreshCw,
   Sparkles,
-  ChevronRight,
+  Camera,
+  Upload,
+  Edit3,
+  Settings,
+  MapPin,
+  CreditCard,
+  UserPlus,
+  Save,
   X
 } from 'lucide-react';
-import { Task, StaffLog, Swimmer, SwimmerLog } from '@/lib/types';
+import { Task, StaffLog, Swimmer, SwimmerLog, SubscriptionPlan } from '@/lib/types';
 import { Modal } from '@/components/ui/Modal';
 
-export function HRDashboardView() {
-  const { currentUser, staffList, refreshStaffList } = useApp();
+const MATROUH_BRANCHES = [
+  'فندق السلام للقوات المسلحة - مطروح',
+  'النادي الاجتماعي - مرسى مطروح',
+];
 
-  const [activeTab, setActiveTab] = useState<'tasks' | 'attendance_penalties' | 'swimmers_oversight'>('tasks');
+const SWIMMER_LEVEL_PRESETS = [
+  'المستوى 1: كسر حاجز الخوف والطفو',
+  'المستوى 2: ضربات الرجلين والانسياب',
+  'المستوى 3: السباحة الحرة والتنفس الجانبي',
+  'المستوى 4: سباحة الظهر والفراشة',
+  'المستوى 5: فريق السرعات والبطولات',
+];
+
+function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
+  const reader = new FileReader();
+  reader.onload = event => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const maxSize = 260;
+      let width = img.width;
+      let height = img.height;
+      if (width > height) {
+        if (width > maxSize) {
+          height = Math.round((height * maxSize) / width);
+          width = maxSize;
+        }
+      } else {
+        if (height > maxSize) {
+          width = Math.round((width * maxSize) / height);
+          height = maxSize;
+        }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        onDone(canvas.toDataURL('image/jpeg', 0.82));
+      }
+    };
+    img.src = event.target?.result as string;
+  };
+  reader.readAsDataURL(file);
+}
+
+export function HRDashboardView() {
+  const { currentUser, staffList, refreshStaffList, registerStaff } = useApp();
+
+  const [activeTab, setActiveTab] = useState<'swimmers_oversight' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('swimmers_oversight');
   const [loading, setLoading] = useState(false);
+
+  // --- Subscription Plans State ---
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  const [newPlanForm, setNewPlanForm] = useState({
+    name: '',
+    price: '',
+    sessions_count: '8',
+    duration_days: '30',
+    description: '',
+  });
 
   // --- 1. Tasks State ---
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -47,17 +109,29 @@ export function HRDashboardView() {
     title: '',
     description: '',
     priority: 'normal' as 'normal' | 'high' | 'urgent',
-    assigned_to_user_id: '',
+    assigned_to_user_id: 'user-coach-1',
     due_date: new Date().toISOString().split('T')[0],
   });
+
+  // --- Register New Assistant / Coach Modal (When hiring opens) ---
+  const [isHireAssistantModalOpen, setIsHireAssistantModalOpen] = useState(false);
+  const [hireForm, setHireForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    role: 'assistant' as 'assistant' | 'coach',
+    title: 'مساعد مدرب سباحة - فرع مطروح',
+    password: '',
+  });
+  const [hireMsg, setHireMsg] = useState('');
 
   // --- 2. Staff Attendance & Penalties State ---
   const [staffLogs, setStaffLogs] = useState<StaffLog[]>([]);
   const [selectedLogDate, setSelectedLogDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [isNewPenaltyModalOpen, setIsNewPenaltyModalOpen] = useState(false);
   const [newPenaltyForm, setNewPenaltyForm] = useState({
-    user_id: '',
-    type: 'penalty' as 'penalty' | 'bonus' | 'lateness',
+    user_id: 'user-coach-1',
+    type: 'bonus' as 'penalty' | 'bonus' | 'lateness',
     amount: '',
     reason: '',
   });
@@ -65,24 +139,55 @@ export function HRDashboardView() {
   // --- 3. Swimmers Oversight State ---
   const [swimmers, setSwimmers] = useState<Swimmer[]>([]);
   const [swimmerSearch, setSwimmerSearch] = useState('');
-  const [swimmerCoachFilter, setSwimmerCoachFilter] = useState('all');
-  const [swimmerLevelFilter, setSwimmerLevelFilter] = useState('all');
-  const [isNewSwimmerModalOpen, setIsNewSwimmerModalOpen] = useState(false);
-  const [newSwimmerForm, setNewSwimmerForm] = useState({
+  const [swimmerBranchFilter, setSwimmerBranchFilter] = useState('all');
+  const [swimmerSubFilter, setSwimmerSubFilter] = useState('all');
+
+  // Add / Edit Swimmer Modal
+  const [isSwimmerModalOpen, setIsSwimmerModalOpen] = useState(false);
+  const [editingSwimmerId, setEditingSwimmerId] = useState<string | null>(null);
+  const swimmerPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [swimmerForm, setSwimmerForm] = useState({
     name: '',
     gender: 'male' as 'male' | 'female',
-    level: 'مبتدئ (Level 1)',
-    assigned_coach_id: '',
+    level: SWIMMER_LEVEL_PRESETS[0],
+    custom_level: '',
+    subscription_type: 'اشتراك شهري تأسيسي (8 حصص)',
+    branch_name: MATROUH_BRANCHES[0],
+    avatar: '',
+    assigned_coach_id: 'user-coach-1',
     parent_name: '',
     parent_phone: '',
     emergency_phone: '',
+    group_name: '',
     health_notes: '',
   });
 
-  // Swimmer Inspection Modal (Parent Complaint Hub)
+  // Swimmer Inspection & Post-Session Level Notebook Modal
   const [inspectingSwimmer, setInspectingSwimmer] = useState<Swimmer | null>(null);
   const [swimmerHistoryLogs, setSwimmerHistoryLogs] = useState<SwimmerLog[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [sessionForm, setSessionForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    status: 'present' as 'present' | 'absent',
+    level_at_time: '',
+    evaluation_notes: '',
+  });
+  const [savingSession, setSavingSession] = useState(false);
+
+  // Fetch Subscription Plans
+  const loadSubscriptionPlans = useCallback(async () => {
+    try {
+      const res = await fetch('/api/subscription-plans');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.plans) {
+          setSubscriptionPlans(data.plans);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
 
   // Fetch Tasks
   const loadTasks = useCallback(async () => {
@@ -125,13 +230,221 @@ export function HRDashboardView() {
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([loadTasks(), loadStaffLogs(), loadSwimmers(), refreshStaffList()]);
+    await Promise.all([
+      loadSubscriptionPlans(),
+      loadSwimmers(),
+      loadTasks(),
+      loadStaffLogs(),
+      refreshStaffList(),
+    ]);
     setLoading(false);
-  }, [loadTasks, loadStaffLogs, loadSwimmers, refreshStaffList]);
+  }, [loadSubscriptionPlans, loadSwimmers, loadTasks, loadStaffLogs, refreshStaffList]);
 
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // Open Modal to Add New Swimmer
+  const handleOpenAddSwimmer = () => {
+    const defaultCoach = staffList.find(s => s.role === 'coach')?.id || 'user-coach-1';
+    const defaultPlan = subscriptionPlans[0]?.name || 'اشتراك شهري تأسيسي (8 حصص)';
+    setEditingSwimmerId(null);
+    setSwimmerForm({
+      name: '',
+      gender: 'male',
+      level: SWIMMER_LEVEL_PRESETS[0],
+      custom_level: '',
+      subscription_type: defaultPlan,
+      branch_name: MATROUH_BRANCHES[0],
+      avatar: '',
+      assigned_coach_id: defaultCoach,
+      parent_name: '',
+      parent_phone: '',
+      emergency_phone: '',
+      group_name: '',
+      health_notes: '',
+    });
+    setIsSwimmerModalOpen(true);
+  };
+
+  // Open Modal to Edit Existing Swimmer
+  const handleOpenEditSwimmer = (swimmer: Swimmer) => {
+    const isPreset = SWIMMER_LEVEL_PRESETS.includes(swimmer.level);
+    setEditingSwimmerId(swimmer.id);
+    setSwimmerForm({
+      name: swimmer.name || '',
+      gender: swimmer.gender || 'male',
+      level: isPreset ? swimmer.level : 'custom',
+      custom_level: isPreset ? '' : swimmer.level,
+      subscription_type: swimmer.subscription_type || subscriptionPlans[0]?.name || 'اشتراك شهري تأسيسي (8 حصص)',
+      branch_name: swimmer.branch_name || MATROUH_BRANCHES[0],
+      avatar: swimmer.avatar || '',
+      assigned_coach_id: swimmer.assigned_coach_id || 'user-coach-1',
+      parent_name: swimmer.parent_name || '',
+      parent_phone: swimmer.parent_phone || '',
+      emergency_phone: swimmer.emergency_phone || '',
+      group_name: swimmer.group_name || '',
+      health_notes: swimmer.health_notes || '',
+    });
+    setIsSwimmerModalOpen(true);
+  };
+
+  // Handle Save Swimmer (Create or Update)
+  const handleSaveSwimmer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!swimmerForm.name.trim() || !swimmerForm.parent_phone.trim()) return;
+
+    const finalLevel =
+      swimmerForm.level === 'custom' && swimmerForm.custom_level.trim()
+        ? swimmerForm.custom_level.trim()
+        : swimmerForm.level === 'custom'
+        ? SWIMMER_LEVEL_PRESETS[0]
+        : swimmerForm.level;
+
+    const payload = {
+      id: editingSwimmerId || undefined,
+      name: swimmerForm.name.trim(),
+      gender: swimmerForm.gender,
+      level: finalLevel,
+      subscription_type: swimmerForm.subscription_type,
+      branch_name: swimmerForm.branch_name,
+      avatar: swimmerForm.avatar,
+      assigned_coach_id: swimmerForm.assigned_coach_id || 'user-coach-1',
+      parent_name: swimmerForm.parent_name.trim(),
+      parent_phone: swimmerForm.parent_phone.trim(),
+      emergency_phone: swimmerForm.emergency_phone.trim(),
+      group_name: swimmerForm.group_name.trim(),
+      health_notes: swimmerForm.health_notes.trim(),
+    };
+
+    try {
+      const res = await fetch('/api/swimmers', {
+        method: editingSwimmerId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsSwimmerModalOpen(false);
+        await loadSwimmers();
+        await refreshStaffList();
+        if (inspectingSwimmer && editingSwimmerId === inspectingSwimmer.id) {
+          setInspectingSwimmer(data.swimmer);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Open Swimmer Inspection Modal & Load Full History Notebook
+  const handleInspectSwimmer = async (swimmer: Swimmer) => {
+    setInspectingSwimmer(swimmer);
+    setSessionForm({
+      date: new Date().toISOString().split('T')[0],
+      status: 'present',
+      level_at_time: swimmer.level,
+      evaluation_notes: '',
+    });
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/swimmer-logs?swimmerId=${swimmer.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) setSwimmerHistoryLogs(data.logs);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Record Post-Training Level & Attendance inside Swimmer Notebook
+  const handleRecordSingleSwimmerSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inspectingSwimmer) return;
+    setSavingSession(true);
+    try {
+      const res = await fetch('/api/swimmer-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recorded_by_user_id: currentUser?.id || 'user-coach-1',
+          records: [
+            {
+              swimmer_id: inspectingSwimmer.id,
+              date: sessionForm.date,
+              status: sessionForm.status,
+              level_at_time: sessionForm.level_at_time.trim() || inspectingSwimmer.level,
+              evaluation_notes: sessionForm.evaluation_notes.trim(),
+            },
+          ],
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Reload logs & swimmer list
+        const logsRes = await fetch(`/api/swimmer-logs?swimmerId=${inspectingSwimmer.id}`);
+        if (logsRes.ok) {
+          const logsData = await logsRes.json();
+          if (logsData.success) setSwimmerHistoryLogs(logsData.logs);
+        }
+        setInspectingSwimmer({
+          ...inspectingSwimmer,
+          level: sessionForm.level_at_time.trim() || inspectingSwimmer.level,
+        });
+        setSessionForm(prev => ({ ...prev, evaluation_notes: '' }));
+        await loadSwimmers();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingSession(false);
+    }
+  };
+
+  // Handle Create Subscription Plan in Settings
+  const handleCreateSubscriptionPlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPlanForm.name.trim()) return;
+    try {
+      const res = await fetch('/api/subscription-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newPlanForm.name.trim(),
+          price: parseFloat(newPlanForm.price) || 0,
+          sessions_count: parseInt(newPlanForm.sessions_count, 10) || 8,
+          duration_days: parseInt(newPlanForm.duration_days, 10) || 30,
+          description: newPlanForm.description.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setNewPlanForm({
+          name: '',
+          price: '',
+          sessions_count: '8',
+          duration_days: '30',
+          description: '',
+        });
+        await loadSubscriptionPlans();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteSubscriptionPlan = async (id: string) => {
+    if (!confirm('هل تريد حذف نوع الاشتراك هذا من الإعدادات؟')) return;
+    try {
+      const res = await fetch(`/api/subscription-plans?id=${id}`, { method: 'DELETE' });
+      if (res.ok) await loadSubscriptionPlans();
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Handle Create Task
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -154,7 +467,7 @@ export function HRDashboardView() {
           title: '',
           description: '',
           priority: 'normal',
-          assigned_to_user_id: '',
+          assigned_to_user_id: 'user-coach-1',
           due_date: new Date().toISOString().split('T')[0],
         });
         loadTasks();
@@ -164,7 +477,6 @@ export function HRDashboardView() {
     }
   };
 
-  // Handle Delete Task
   const handleDeleteTask = async (id: string) => {
     if (!confirm('هل أنت متأكد من حذف هذه المهمة؟')) return;
     try {
@@ -172,6 +484,32 @@ export function HRDashboardView() {
       if (res.ok) loadTasks();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  // Handle Hire Assistant / Coach
+  const handleHireSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setHireMsg('');
+    if (!hireForm.name.trim() || !hireForm.phone.trim() || !hireForm.email.trim()) return;
+    const res = await registerStaff(hireForm);
+    if (res.success) {
+      setHireMsg('✅ تم إضافة المساعد/المدرب بنجاح إلى المنظومة!');
+      setHireForm({
+        name: '',
+        phone: '',
+        email: '',
+        role: 'assistant',
+        title: 'مساعد مدرب سباحة - فرع مطروح',
+        password: '',
+      });
+      await refreshStaffList();
+      setTimeout(() => {
+        setIsHireAssistantModalOpen(false);
+        setHireMsg('');
+      }, 1500);
+    } else {
+      setHireMsg(res.error || 'تعذر التسجيل');
     }
   };
 
@@ -219,8 +557,8 @@ export function HRDashboardView() {
       if (data.success) {
         setIsNewPenaltyModalOpen(false);
         setNewPenaltyForm({
-          user_id: '',
-          type: 'penalty',
+          user_id: 'user-coach-1',
+          type: 'bonus',
           amount: '',
           reason: '',
         });
@@ -228,54 +566,6 @@ export function HRDashboardView() {
       }
     } catch (e) {
       console.error(e);
-    }
-  };
-
-  // Handle Create Swimmer
-  const handleCreateSwimmer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newSwimmerForm.name.trim() || !newSwimmerForm.assigned_coach_id || !newSwimmerForm.parent_phone.trim()) return;
-
-    try {
-      const res = await fetch('/api/swimmers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSwimmerForm),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIsNewSwimmerModalOpen(false);
-        setNewSwimmerForm({
-          name: '',
-          gender: 'male',
-          level: 'مبتدئ (Level 1)',
-          assigned_coach_id: '',
-          parent_name: '',
-          parent_phone: '',
-          emergency_phone: '',
-          health_notes: '',
-        });
-        loadSwimmers();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  // Open Swimmer Inspection Modal & Load Full History Notebook
-  const handleInspectSwimmer = async (swimmer: Swimmer) => {
-    setInspectingSwimmer(swimmer);
-    setHistoryLoading(true);
-    try {
-      const res = await fetch(`/api/swimmer-logs?swimmerId=${swimmer.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) setSwimmerHistoryLogs(data.logs);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setHistoryLoading(false);
     }
   };
 
@@ -288,15 +578,16 @@ export function HRDashboardView() {
 
   // Filtered Swimmers
   const filteredSwimmers = swimmers.filter(s => {
-    if (swimmerCoachFilter !== 'all' && s.assigned_coach_id !== swimmerCoachFilter) return false;
-    if (swimmerLevelFilter !== 'all' && s.level !== swimmerLevelFilter) return false;
+    if (swimmerBranchFilter !== 'all' && s.branch_name !== swimmerBranchFilter) return false;
+    if (swimmerSubFilter !== 'all' && s.subscription_type !== swimmerSubFilter) return false;
     if (swimmerSearch.trim()) {
       const q = swimmerSearch.toLowerCase();
       return (
         s.name.toLowerCase().includes(q) ||
         s.code.toLowerCase().includes(q) ||
         s.parent_phone.includes(q) ||
-        (s.parent_name && s.parent_name.toLowerCase().includes(q))
+        (s.parent_name && s.parent_name.toLowerCase().includes(q)) ||
+        (s.level && s.level.toLowerCase().includes(q))
       );
     }
     return true;
@@ -316,26 +607,40 @@ export function HRDashboardView() {
         <div className="absolute top-0 left-0 w-80 h-80 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-400/20 text-sky-200 text-xs font-bold mb-2">
-              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-              <span>لوحة التحكم المركزية الموحدة لـ HR والإدارة العامة</span>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-400/20 text-sky-200 text-xs font-bold">
+                <MapPin className="w-3.5 h-3.5 text-sky-400" />
+                <span>فندق السلام للقوات المسلحة & النادي الاجتماعي - مرسى مطروح</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-400/20 text-emerald-200 text-[11px] font-bold">
+                <Sparkles className="w-3 h-3 text-emerald-300" />
+                <span>إدارة الشركاء: مصطفى محمد فتحي • يوسف سمير مصطفى • كابتن أسامة هيثم مصطفى</span>
+              </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-white">
-              منظومة إدارة الكادر والمهام وسجلات السباحين
+              منظومة إدارة السباحين، الاشتراكات، والموارد البشرية (مطروح)
             </h1>
             <p className="text-xs sm:text-sm text-sky-200/80 mt-1">
-              ربط فوري بين قرارات الإدارة وكراسة غياب المدربين والمساعدين بالملعب المائي
+              تسجيل بيانات وصور اللاعبين، أنواع الاشتراكات، ومتابعة مستوى كل لاعب بعد كل تمرينة
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsHireAssistantModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-xs font-bold text-emerald-200 transition-all cursor-pointer"
+              title="إضافة مساعد مدرب جديد عند فتح باب العمل"
+            >
+              <UserPlus className="w-4 h-4 text-emerald-300" />
+              <span>+ إضافة مساعد مدرب (عند فتح التعيين)</span>
+            </button>
             <button
               onClick={refreshAll}
               disabled={loading}
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-white transition-all cursor-pointer"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              <span>تحديث البيانات المباشرة</span>
+              <span>تحديث البيانات</span>
             </button>
           </div>
         </div>
@@ -343,30 +648,58 @@ export function HRDashboardView() {
         {/* Global Key Stats Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 pt-5 border-t border-white/10">
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">المدربون المعتمدون</div>
-            <div className="text-xl font-black text-white mt-0.5">{coachesCount} مدرب</div>
+            <div className="text-[11px] text-sky-200 font-medium">المدرب المعتمد (الشريك)</div>
+            <div className="text-base sm:text-lg font-black text-white mt-0.5 truncate">
+              {coachesCount} مدرب (كابتن أسامة)
+            </div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
             <div className="text-[11px] text-sky-200 font-medium">مساعدو المدربين</div>
-            <div className="text-xl font-black text-white mt-0.5">{assistantsCount} مساعد</div>
+            <div className="text-base sm:text-lg font-black text-white mt-0.5">
+              {assistantsCount === 0 ? '0 مساعد (لم يفتح بعد)' : `${assistantsCount} مساعد`}
+            </div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">إجمالي السباحين</div>
+            <div className="text-[11px] text-sky-200 font-medium">إجمالي السباحين المسجلين</div>
             <div className="text-xl font-black text-white mt-0.5">{swimmers.length} سباح</div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-amber-200 font-medium">مهام قيد المتابعة</div>
-            <div className="text-xl font-black text-amber-300 mt-0.5">{pendingTasksCount + inProgressTasksCount} مهمة</div>
+            <div className="text-[11px] text-amber-200 font-medium">باقات الاشتراكات المتاحة</div>
+            <div className="text-xl font-black text-amber-300 mt-0.5">{subscriptionPlans.length} باقات</div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10 col-span-2 sm:col-span-1">
-            <div className="text-[11px] text-emerald-200 font-medium">مهام أنجزها المدربون</div>
-            <div className="text-xl font-black text-emerald-300 mt-0.5">{completedTasksCount} مكتملة</div>
+            <div className="text-[11px] text-emerald-200 font-medium">مواقع التدريب بمطروح</div>
+            <div className="text-sm font-black text-emerald-300 mt-1">فندق السلام & النادي الاجتماعي</div>
           </div>
         </div>
       </div>
 
       {/* Main Tabs Navigation */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('swimmers_oversight')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
+            activeTab === 'swimmers_oversight'
+              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>اللاعبين بالصور والاشتراكات ومستوى كل تمرينة ({swimmers.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('subscription_settings')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
+            activeTab === 'subscription_settings'
+              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          <span>⚙️ إعدادات أنواع الاشتراكات والفروع ({subscriptionPlans.length})</span>
+        </button>
+
         <button
           onClick={() => setActiveTab('tasks')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
@@ -376,7 +709,7 @@ export function HRDashboardView() {
           }`}
         >
           <CheckSquare className="w-4 h-4" />
-          <span>إدارة الكادر وتكليف المهام ({tasks.length})</span>
+          <span>إدارة الكادر والمهام ({tasks.length})</span>
         </button>
 
         <button
@@ -388,23 +721,347 @@ export function HRDashboardView() {
           }`}
         >
           <ShieldAlert className="w-4 h-4" />
-          <span>حضور وجزاءات ومكافآت الموظفين ({staffLogs.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('swimmers_oversight')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'swimmers_oversight'
-              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>متابعة السباحين وكراسة الغياب وحل الشكاوى ({swimmers.length})</span>
+          <span>حضور ومكافآت الكادر ({staffLogs.length})</span>
         </button>
       </div>
 
-      {/* ==================== TAB 1: STAFF & TASKS ==================== */}
+      {/* ==================== TAB 1: SWIMMERS WITH PHOTOS, SUBSCRIPTIONS & POST-WORKOUT LEVEL ==================== */}
+      {activeTab === 'swimmers_oversight' && (
+        <div className="space-y-6">
+          {/* Search, Filter & Add Swimmer */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2.5 flex-1">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <input
+                  type="text"
+                  placeholder="ابحث باسم السباح، الكود، المستوى، أو هاتف ولي الأمر..."
+                  value={swimmerSearch}
+                  onChange={e => setSwimmerSearch(e.target.value)}
+                  className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-sky-500"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+              </div>
+
+              <select
+                value={swimmerBranchFilter}
+                onChange={e => setSwimmerBranchFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+              >
+                <option value="all">📍 جميع مواقع مطروح (فندق السلام & النادي الاجتماعي)</option>
+                {MATROUH_BRANCHES.map(b => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+
+              <select
+                value={swimmerSubFilter}
+                onChange={e => setSwimmerSubFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+              >
+                <option value="all">💳 جميع أنواع الاشتراكات</option>
+                {subscriptionPlans.map(p => (
+                  <option key={p.id} value={p.name}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveTab('subscription_settings')}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                title="إضافة أو تعديل أنواع الاشتراكات"
+              >
+                <Settings className="w-3.5 h-3.5 text-sky-600" />
+                <span>إعدادات الاشتراكات</span>
+              </button>
+              <button
+                onClick={handleOpenAddSwimmer}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-sky-600/20 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>تسجيل لاعب جديد بالصورة ونوع الاشتراك</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Master Swimmer Roster Table */}
+          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-900 text-sm sm:text-base">
+                  سجل سباحي الأكاديمية بالصور، نوع الاشتراك، ومستوى كل تمرينة
+                </h2>
+                <p className="text-xs text-slate-500">
+                  اضغط على "إضافة تمرينة / الكراسة" لتسجيل مستوى اللاعب بعد كل تمرينة، أو "تعديل" لتغيير صورته وبياناته
+                </p>
+              </div>
+              <span className="text-xs font-bold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-xl">
+                {filteredSwimmers.length} لاعب
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                  <tr>
+                    <th className="p-3">اللاعب والصورة</th>
+                    <th className="p-3">نوع الاشتراك والمكان</th>
+                    <th className="p-3">المستوى الحالي (بعد آخر تمرينة)</th>
+                    <th className="p-3">الكابتن المسؤول</th>
+                    <th className="p-3">ولي الأمر</th>
+                    <th className="p-3 text-center">الحضور / الغياب</th>
+                    <th className="p-3 text-center">إجراءات ومستوى التمرينة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredSwimmers.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400">
+                        لا يوجد سباحون يطابقون خيارات البحث.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSwimmers.map(swimmer => (
+                      <tr key={swimmer.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="p-3">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                              alt={swimmer.name}
+                              className="w-11 h-11 rounded-2xl object-cover border border-slate-200 shadow-xs shrink-0"
+                            />
+                            <div>
+                              <div className="font-bold text-slate-900 text-xs sm:text-sm">{swimmer.name}</div>
+                              <div className="font-mono text-[10px] text-sky-600 font-semibold">{swimmer.code}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <div className="font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-lg inline-block text-[11px]">
+                            💳 {swimmer.subscription_type || 'اشتراك شهري تأسيسي (8 حصص)'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-sky-600 shrink-0" />
+                            <span>{swimmer.branch_name || 'فندق السلام للقوات المسلحة - مطروح'}</span>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <span className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-sky-50 text-sky-800 border border-sky-200 inline-block">
+                            🏊 {swimmer.level}
+                          </span>
+                          {swimmer.last_attendance_date && (
+                            <div className="text-[10px] text-slate-400 mt-1">
+                              آخر تمرينة: <span className="font-mono">{swimmer.last_attendance_date}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 font-semibold text-slate-800">
+                          {swimmer.assigned_coach_name || 'كابتن أسامة هيثم مصطفى'}
+                        </td>
+                        <td className="p-3">
+                          <div className="text-slate-900 font-medium">{swimmer.parent_name || 'ولي الأمر'}</div>
+                          <a
+                            href={`tel:${swimmer.parent_phone}`}
+                            className="font-mono text-sky-600 hover:underline text-[11px] font-bold block dir-ltr"
+                          >
+                            {swimmer.parent_phone}
+                          </a>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="inline-flex items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold font-mono" title="مرات الحضور">
+                              ✓ {swimmer.total_attendances || 0}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-lg bg-rose-50 text-rose-700 font-bold font-mono" title="مرات الغياب">
+                              ✕ {swimmer.total_absences || 0}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleInspectSwimmer(swimmer)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-600 text-white hover:bg-sky-500 rounded-xl font-bold text-[11px] transition-all cursor-pointer shadow-xs"
+                              title="إضافة مستوى اللاعب بعد التمرينة وفحص كراسة الحضور"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" />
+                              <span>مستوى التمرينة / الكراسة</span>
+                            </button>
+                            <button
+                              onClick={() => handleOpenEditSwimmer(swimmer)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl font-bold text-[11px] transition-all cursor-pointer"
+                              title="تعديل بيانات وصورة السباح ونوع الاشتراك"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-sky-600" />
+                              <span>تعديل</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== TAB 2: SUBSCRIPTION PLANS & BRANCHES SETTINGS ==================== */}
+      {activeTab === 'subscription_settings' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Add New Subscription Plan Form */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm h-fit">
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center">
+                <CreditCard className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">إضافة نوع اشتراك جديد</h3>
+                <p className="text-[11px] text-slate-500">يظهر تلقائياً عند تسجيل أو تعديل أي لاعب</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateSubscriptionPlan} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">اسم نوع الاشتراك *</label>
+                <input
+                  type="text"
+                  required
+                  value={newPlanForm.name}
+                  onChange={e => setNewPlanForm({ ...newPlanForm, name: e.target.value })}
+                  placeholder="مثال: اشتراك شهري 8 حصص - فندق السلام"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">السعر (ج.م)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newPlanForm.price}
+                    onChange={e => setNewPlanForm({ ...newPlanForm, price: e.target.value })}
+                    placeholder="800"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">عدد الحصص</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newPlanForm.sessions_count}
+                    onChange={e => setNewPlanForm({ ...newPlanForm, sessions_count: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">المدة (يوم)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newPlanForm.duration_days}
+                    onChange={e => setNewPlanForm({ ...newPlanForm, duration_days: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">ملاحظات / تفاصيل الباقة</label>
+                <input
+                  type="text"
+                  value={newPlanForm.description}
+                  onChange={e => setNewPlanForm({ ...newPlanForm, description: e.target.value })}
+                  placeholder="مثال: حصتين أسبوعياً شاملة دخول المسبح"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl shadow-md shadow-sky-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة نوع الاشتراك إلى النظام</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Existing Subscription Plans & Branches List */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
+              <h3 className="font-bold text-slate-900 text-sm sm:text-base mb-1">
+                أنواع الاشتراكات المعتمدة حالياً ({subscriptionPlans.length})
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                هذه الباقات تظهر في قائمة "نوع الاشتراك" أثناء تسجيل اللاعبين الجدد أو تعديل بياناتهم
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {subscriptionPlans.map(plan => (
+                  <div
+                    key={plan.id}
+                    className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60 flex items-start justify-between gap-3"
+                  >
+                    <div className="space-y-1">
+                      <div className="font-bold text-slate-900 text-xs sm:text-sm">{plan.name}</div>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                        <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200 font-mono">
+                          {plan.price} ج.م
+                        </span>
+                        <span className="text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg border border-sky-200">
+                          {plan.sessions_count} حصة
+                        </span>
+                        <span className="text-slate-500 font-mono">{plan.duration_days} يوم</span>
+                      </div>
+                      {plan.description && (
+                        <p className="text-[11px] text-slate-500 pt-1">{plan.description}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteSubscriptionPlan(plan.id)}
+                      className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer shrink-0"
+                      title="حذف الباقة"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Active Locations in Marsa Matrouh */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
+              <h3 className="font-bold text-slate-900 text-sm sm:text-base mb-1">
+                مواقع العمل المعتمدة للأكاديمية في مرسى مطروح
+              </h3>
+              <p className="text-xs text-slate-500 mb-3">
+                المواقع الرسمية المسجلة للشركاء (مصطفى محمد فتحي • يوسف سمير مصطفى • كابتن أسامة هيثم مصطفى)
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {MATROUH_BRANCHES.map((branch, idx) => (
+                  <div key={idx} className="p-4 rounded-2xl bg-sky-50/70 border border-sky-100 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-sky-600 text-white flex items-center justify-center shrink-0">
+                      <MapPin className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-slate-900 text-xs sm:text-sm">{branch}</div>
+                      <div className="text-[11px] text-sky-700 font-semibold mt-0.5">
+                        فرع نشط • مرسى مطروح
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== TAB 3: STAFF & TASKS ==================== */}
       {activeTab === 'tasks' && (
         <div className="space-y-6">
           {/* Action Row & Filters */}
@@ -433,54 +1090,75 @@ export function HRDashboardView() {
                 <option value="all">كل الكادر المكلف</option>
                 {staffList.map(st => (
                   <option key={st.id} value={st.id}>
-                    {st.name} ({st.role === 'coach' ? 'مدرب' : st.role === 'assistant' ? 'مساعد' : 'إداري'})
+                    {st.name}
                   </option>
                 ))}
               </select>
             </div>
 
-            <button
-              onClick={() => setIsNewTaskModalOpen(true)}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-sky-600/30 transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إسناد مهمة جديدة لكابتن / مساعد</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsHireAssistantModalOpen(true)}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>+ إضافة مساعد مدرب</span>
+              </button>
+              <button
+                onClick={() => setIsNewTaskModalOpen(true)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-sky-600/30 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إسناد مهمة جديدة</span>
+              </button>
+            </div>
           </div>
 
-          {/* Staff Capacity & Assigned Tasks Grid */}
+          {/* Partners & Staff Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(staff => {
+            {staffList.map(staff => {
               const staffTasks = tasks.filter(t => t.assigned_to_user_id === staff.id);
               const pending = staffTasks.filter(t => t.status !== 'completed').length;
               return (
                 <div key={staff.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-sky-300 transition-all">
                   <div className="flex items-center gap-3">
                     <img
-                      src={staff.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
+                      src={staff.avatar || 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'}
                       alt={staff.name}
-                      className="w-11 h-11 rounded-2xl object-cover border border-slate-200"
+                      className="w-12 h-12 rounded-2xl object-cover border border-slate-200"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="font-bold text-slate-900 text-sm truncate">{staff.name}</div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                      <div className="text-[11px] text-slate-500 truncate">{staff.title}</div>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-1">
                         <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                          staff.role === 'coach' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700'
+                          staff.role === 'super_admin'
+                            ? 'bg-purple-50 text-purple-700'
+                            : staff.role === 'hr'
+                            ? 'bg-amber-50 text-amber-800'
+                            : staff.role === 'coach'
+                            ? 'bg-sky-50 text-sky-700'
+                            : 'bg-emerald-50 text-emerald-700'
                         }`}>
-                          {staff.role === 'coach' ? 'مدرب سباحة' : 'مساعد مدرب'}
+                          {staff.role === 'super_admin'
+                            ? 'الشريك والمدير العام'
+                            : staff.role === 'hr'
+                            ? 'الشريك ومسؤول HR'
+                            : staff.role === 'coach'
+                            ? 'الشريك وكبير المدربين'
+                            : 'مساعد مدرب'}
                         </span>
-                        <span>{staff.phone}</span>
                       </div>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-100 text-center">
                     <div className="bg-slate-50 p-2 rounded-xl">
-                      <div className="text-[10px] text-slate-500">سباحين مسؤول عنهم</div>
+                      <div className="text-[10px] text-slate-500">سباحين تحت إشرافه</div>
                       <div className="text-sm font-bold text-slate-800">{staff.total_swimmers_count || 0} سباح</div>
                     </div>
                     <div className={`p-2 rounded-xl ${pending > 0 ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
-                      <div className="text-[10px]">مهام معلقة لديه</div>
+                      <div className="text-[10px]">مهام قيد المتابعة</div>
                       <div className="text-sm font-bold">{pending} مهمة</div>
                     </div>
                   </div>
@@ -493,7 +1171,7 @@ export function HRDashboardView() {
           <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <h2 className="font-bold text-slate-900 text-sm sm:text-base">
-                سجل المهام والتعليمات الصادرة للكادر التدريبي
+                سجل المهام والتكليفات
               </h2>
               <span className="text-xs text-slate-500">عدد المهام: {filteredTasks.length}</span>
             </div>
@@ -552,13 +1230,11 @@ export function HRDashboardView() {
                           {task.due_date && (
                             <span>تاريخ الاستحقاق: <span className="font-mono">{task.due_date}</span></span>
                           )}
-                          <span>أُنشئت: <span className="font-mono text-slate-400">{task.created_at.split('T')[0]}</span></span>
                         </div>
 
-                        {/* Live Coach Feedback */}
                         {task.coach_notes && (
                           <div className="mt-2 p-2.5 bg-sky-50/70 border border-sky-100 rounded-xl text-xs text-sky-900">
-                            <span className="font-bold">ملاحظات الكابتن عند التنفيذ: </span>
+                            <span className="font-bold">ملاحظات التنفيذ: </span>
                             <span>{task.coach_notes}</span>
                           </div>
                         )}
@@ -582,10 +1258,9 @@ export function HRDashboardView() {
         </div>
       )}
 
-      {/* ==================== TAB 2: STAFF ATTENDANCE & PENALTIES ==================== */}
+      {/* ==================== TAB 4: STAFF ATTENDANCE & PENALTIES ==================== */}
       {activeTab === 'attendance_penalties' && (
         <div className="space-y-6">
-          {/* Controls Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -606,23 +1281,21 @@ export function HRDashboardView() {
                 className="inline-flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-rose-600/20 transition-all cursor-pointer"
               >
                 <ShieldAlert className="w-4 h-4" />
-                <span>إصدار جزاء / خصم أو مكافأة مالية</span>
+                <span>تسجيل مكافأة أو جزاء مالي</span>
               </button>
             </div>
           </div>
 
-          {/* Fast Staff Attendance Matrix */}
           <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
             <h2 className="font-bold text-slate-900 text-sm sm:text-base mb-1">
-              تسجيل حضور وغياب الكادر التدريبي ليوم ({selectedLogDate})
+              تسجيل الحضور اليومي للكادر ({selectedLogDate})
             </h2>
             <p className="text-xs text-slate-500 mb-4">
-              يمكنك بضغطة زر تحديد حضور، تأخير، أو غياب أي كابتن أو مساعد مدرب
+              تحديد حالة التواجد اليومي في فرعي فندق السلام والنادي الاجتماعي بمطروح
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(staff => {
-                // Find existing log for selected date
+              {staffList.map(staff => {
                 const todayLog = staffLogs.find(
                   l => l.user_id === staff.id && l.date === selectedLogDate && l.type === 'attendance'
                 );
@@ -630,10 +1303,15 @@ export function HRDashboardView() {
 
                 return (
                   <div key={staff.id} className="p-3.5 border border-slate-200 rounded-2xl bg-slate-50/50 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-bold text-slate-900 text-xs sm:text-sm truncate">{staff.name}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {staff.role === 'coach' ? 'مدرب سباحة' : 'مساعد مدرب'}
+                    <div className="min-w-0 flex items-center gap-2.5">
+                      <img
+                        src={staff.avatar || 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'}
+                        alt={staff.name}
+                        className="w-9 h-9 rounded-xl object-cover border border-slate-200 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-900 text-xs sm:text-sm truncate">{staff.name}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{staff.title}</div>
                       </div>
                     </div>
 
@@ -674,230 +1352,491 @@ export function HRDashboardView() {
               })}
             </div>
           </div>
-
-          {/* Penalties & Bonuses Records Table */}
-          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm sm:text-base">
-                  سجل الجزاءات والمكافآت والخصومات الرسمية
-                </h3>
-                <p className="text-xs text-slate-500">
-                  تظهر هذه القرارات والخصومات فوراً في حساب المدرب بشفافية تامة
-                </p>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                  <tr>
-                    <th className="p-3">التاريخ</th>
-                    <th className="p-3">الموظف / الكابتن</th>
-                    <th className="p-3">النوع</th>
-                    <th className="p-3">المبلغ</th>
-                    <th className="p-3">سبب القرار والملاحظات</th>
-                    <th className="p-3">الجهة المصدرة</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {staffLogs.filter(l => l.type !== 'attendance').length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-slate-400">
-                        لا توجد جزاءات أو مكافآت مسجلة حتى الآن.
-                      </td>
-                    </tr>
-                  ) : (
-                    staffLogs
-                      .filter(l => l.type !== 'attendance')
-                      .map(log => {
-                        const isPenalty = log.type === 'penalty' || log.type === 'lateness';
-                        return (
-                          <tr key={log.id} className="hover:bg-slate-50">
-                            <td className="p-3 font-mono text-slate-500">{log.date}</td>
-                            <td className="p-3 font-bold text-slate-900">
-                              {log.user_name}
-                              <span className="block text-[10px] text-slate-400 font-normal">
-                                {log.user_role === 'coach' ? 'مدرب سباحة' : 'مساعد مدرب'}
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                isPenalty ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              }`}>
-                                {log.type === 'penalty' ? 'خصم / جزاء' : log.type === 'lateness' ? 'خصم تأخير' : 'مكافأة تميز'}
-                              </span>
-                            </td>
-                            <td className={`p-3 font-mono font-bold ${isPenalty ? 'text-rose-600' : 'text-emerald-600'}`}>
-                              {isPenalty ? `-${log.amount}` : `+${log.amount}`} ج.م
-                            </td>
-                            <td className="p-3 max-w-xs text-slate-700 leading-relaxed font-medium">
-                              {log.reason || '—'}
-                            </td>
-                            <td className="p-3 text-slate-500">
-                              {log.logged_by_name || 'إدارة HR'}
-                            </td>
-                          </tr>
-                        );
-                      })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
       )}
 
-      {/* ==================== TAB 3: SWIMMERS OVERSIGHT (PARENT COMPLAINT HUB) ==================== */}
-      {activeTab === 'swimmers_oversight' && (
-        <div className="space-y-6">
-          {/* Search, Filter & Add Swimmer */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-            <div className="flex flex-wrap items-center gap-2.5 flex-1">
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
-                <input
-                  type="text"
-                  placeholder="ابحث باسم السباح، الكود، أو هاتف ولي الأمر..."
-                  value={swimmerSearch}
-                  onChange={e => setSwimmerSearch(e.target.value)}
-                  className="w-full pr-9 pl-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-sky-500"
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
-              </div>
-
-              <select
-                value={swimmerCoachFilter}
-                onChange={e => setSwimmerCoachFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+      {/* ==================== MODAL 1: ADD / EDIT SWIMMER (WITH PHOTO, SUBSCRIPTION TYPE & BRANCH) ==================== */}
+      <Modal
+        isOpen={isSwimmerModalOpen}
+        onClose={() => setIsSwimmerModalOpen(false)}
+        title={editingSwimmerId ? 'تعديل بيانات وصورة السباح ونوع الاشتراك' : 'تسجيل سباح جديد بالصورة ونوع الاشتراك'}
+      >
+        <form onSubmit={handleSaveSwimmer} className="space-y-4 text-xs" dir="rtl">
+          {/* Swimmer Photo Upload Banner */}
+          <div className="p-3.5 bg-sky-50/70 border border-sky-100 rounded-2xl flex items-center gap-3.5">
+            <div className="relative shrink-0">
+              <img
+                src={swimmerForm.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                alt="صورة اللاعب"
+                className="w-16 h-16 rounded-2xl object-cover border-2 border-white shadow-sm"
+              />
+              <button
+                type="button"
+                onClick={() => swimmerPhotoInputRef.current?.click()}
+                className="absolute inset-0 bg-slate-900/45 hover:bg-slate-900/65 text-white rounded-2xl flex flex-col items-center justify-center transition-all cursor-pointer"
               >
-                <option value="all">جميع المدربين والمساعدين</option>
-                {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
+                <Camera className="w-4 h-4" />
+                <span className="text-[9px] font-bold mt-0.5">صورة اللاعب</span>
+              </button>
+              <input
+                ref={swimmerPhotoInputRef}
+                type="file"
+                accept="image/*"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    compressImageFile(file, dataUrl => {
+                      setSwimmerForm(prev => ({ ...prev, avatar: dataUrl }));
+                    });
+                  }
+                }}
+                className="hidden"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-bold text-slate-900 text-xs">الصورة الشخصية للاعب</div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                يمكنك التقاط صورة مباشرة للاعب من كاميرا الموبايل أو اختيارها من المعرض
+              </p>
+              <button
+                type="button"
+                onClick={() => swimmerPhotoInputRef.current?.click()}
+                className="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-bold text-[11px] transition-all cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>اختيار / تغيير صورة اللاعب</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">اسم اللاعب الرباعي *</label>
+              <input
+                type="text"
+                required
+                value={swimmerForm.name}
+                onChange={e => setSwimmerForm({ ...swimmerForm, name: e.target.value })}
+                placeholder="مثال: زياد حازم الشريف"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-semibold"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">النوع</label>
+              <select
+                value={swimmerForm.gender}
+                onChange={e => setSwimmerForm({ ...swimmerForm, gender: e.target.value as any })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+              >
+                <option value="male">ولد (ذكر)</option>
+                <option value="female">بنت (أنثى)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Subscription Type & Matrouh Location */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">نوع الاشتراك (من الإعدادات) *</label>
+              <select
+                value={swimmerForm.subscription_type}
+                onChange={e => setSwimmerForm({ ...swimmerForm, subscription_type: e.target.value })}
+                className="w-full p-2.5 bg-indigo-50/60 border border-indigo-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-indigo-950"
+              >
+                {subscriptionPlans.map(plan => (
+                  <option key={plan.id} value={plan.name}>
+                    {plan.name} ({plan.price} ج.م - {plan.sessions_count} حصة)
+                  </option>
                 ))}
               </select>
+            </div>
 
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">مكان التدريب في مطروح *</label>
               <select
-                value={swimmerLevelFilter}
-                onChange={e => setSwimmerLevelFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+                value={swimmerForm.branch_name}
+                onChange={e => setSwimmerForm({ ...swimmerForm, branch_name: e.target.value })}
+                className="w-full p-2.5 bg-sky-50/60 border border-sky-200 rounded-xl outline-none focus:border-sky-500 font-bold text-sky-950"
               >
-                <option value="all">جميع المستويات الفنية</option>
-                <option value="مبتدئ (Level 1)">مبتدئ (Level 1)</option>
-                <option value="مستوى متقدم (Level 2)">مستوى متقدم (Level 2)</option>
-                <option value="فراشة وزعانف (Level 3)">فراشة وزعانف (Level 3)</option>
-                <option value="فريق بطولات الأكاديمية">فريق بطولات الأكاديمية</option>
+                {MATROUH_BRANCHES.map(branch => (
+                  <option key={branch} value={branch}>
+                    📍 {branch}
+                  </option>
+                ))}
               </select>
             </div>
+          </div>
 
+          {/* Level & Coach */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">المستوى الفني الحالي *</label>
+              <select
+                value={swimmerForm.level}
+                onChange={e => setSwimmerForm({ ...swimmerForm, level: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+              >
+                {SWIMMER_LEVEL_PRESETS.map(lvl => (
+                  <option key={lvl} value={lvl}>{lvl}</option>
+                ))}
+                <option value="custom">✍️ كتابة مستوى مخصص...</option>
+              </select>
+              {swimmerForm.level === 'custom' && (
+                <input
+                  type="text"
+                  value={swimmerForm.custom_level}
+                  onChange={e => setSwimmerForm({ ...swimmerForm, custom_level: e.target.value })}
+                  placeholder="اكتب مستوى اللاعب بالتفصيل..."
+                  className="w-full mt-2 p-2 bg-white border border-sky-300 rounded-xl outline-none font-semibold"
+                />
+              )}
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">الكابتن المسؤول *</label>
+              <select
+                required
+                value={swimmerForm.assigned_coach_id}
+                onChange={e => setSwimmerForm({ ...swimmerForm, assigned_coach_id: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+              >
+                {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.role === 'coach' ? 'مدرب' : 'مساعد'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">اسم ولي الأمر</label>
+              <input
+                type="text"
+                value={swimmerForm.parent_name}
+                onChange={e => setSwimmerForm({ ...swimmerForm, parent_name: e.target.value })}
+                placeholder="اسم الأب أو ولي الأمر"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">هاتف ولي الأمر (واتساب) *</label>
+              <input
+                type="tel"
+                required
+                value={swimmerForm.parent_phone}
+                onChange={e => setSwimmerForm({ ...swimmerForm, parent_phone: e.target.value })}
+                placeholder="010XXXXXXXX"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو مواعيد المجموعة</label>
+            <input
+              type="text"
+              value={swimmerForm.health_notes}
+              onChange={e => setSwimmerForm({ ...swimmerForm, health_notes: e.target.value })}
+              placeholder="أي ملاحظات صحية أو تفاصيل إضافية..."
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
             <button
-              onClick={() => setIsNewSwimmerModalOpen(true)}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-sky-600/20 transition-all cursor-pointer"
+              type="button"
+              onClick={() => setIsSwimmerModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
-              <span>إضافة سباح جديد وتسكينه</span>
+              إلغاء
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-md shadow-sky-600/30 cursor-pointer flex items-center gap-1.5"
+            >
+              <Save className="w-4 h-4" />
+              <span>{editingSwimmerId ? 'حفظ التعديلات والصورة' : 'حفظ وتسجيل السباح'}</span>
             </button>
           </div>
+        </form>
+      </Modal>
 
-          {/* Master Swimmer Roster Table */}
-          <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h2 className="font-bold text-slate-900 text-sm sm:text-base">
-                  سجل السباحين المركزي وكراسة المتابعة الإدارية
-                </h2>
-                <p className="text-xs text-slate-500">
-                  اضغط على أي سباح لفتح "كراسة الغياب وسجل السباح" وحل أي شكوى من ولي الأمر ببيانات الحصص المؤكدة
-                </p>
+      {/* ==================== MODAL 2: SWIMMER NOTEBOOK & ADD LEVEL AFTER EVERY WORKOUT ==================== */}
+      <Modal
+        isOpen={!!inspectingSwimmer}
+        onClose={() => setInspectingSwimmer(null)}
+        title={`كراسة اللاعب ومستوى التمارين: ${inspectingSwimmer?.name || ''}`}
+      >
+        {inspectingSwimmer && (
+          <div className="space-y-4 text-xs" dir="rtl">
+            {/* Swimmer Overview Header with Photo */}
+            <div className="p-4 bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-100 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={inspectingSwimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                  alt={inspectingSwimmer.name}
+                  className="w-14 h-14 rounded-2xl object-cover border-2 border-white shadow-sm shrink-0"
+                />
+                <div>
+                  <div className="font-bold text-slate-900 text-sm">{inspectingSwimmer.name}</div>
+                  <div className="text-slate-600 text-[11px] flex flex-wrap items-center gap-2 mt-0.5">
+                    <span className="font-mono text-sky-700 font-bold">{inspectingSwimmer.code}</span>
+                    <span>•</span>
+                    <span className="font-bold text-indigo-700">{inspectingSwimmer.subscription_type || 'اشتراك شهري'}</span>
+                    <span>•</span>
+                    <span>{inspectingSwimmer.branch_name || 'فندق السلام للقوات المسلحة - مطروح'}</span>
+                  </div>
+                </div>
               </div>
-              <span className="text-xs font-bold text-sky-700 bg-sky-50 px-2.5 py-1 rounded-xl">
-                {filteredSwimmers.length} سباح
-              </span>
+
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 bg-white border border-sky-200 rounded-xl text-sky-800 font-bold text-xs shadow-sm">
+                  المستوى الحالي: {inspectingSwimmer.level}
+                </span>
+              </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                  <tr>
-                    <th className="p-3">السباح</th>
-                    <th className="p-3">المستوى الفني</th>
-                    <th className="p-3">الكابتن المسؤول</th>
-                    <th className="p-3">ولي الأمر والتواصل</th>
-                    <th className="p-3 text-center">إجمالي الحضور</th>
-                    <th className="p-3 text-center">إجمالي الغياب</th>
-                    <th className="p-3">آخر حصة</th>
-                    <th className="p-3 text-center">كراسة السباح</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredSwimmers.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="p-8 text-center text-slate-400">
-                        لا يوجد سباحون يطابقون خيارات البحث.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredSwimmers.map(swimmer => (
-                      <tr key={swimmer.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3">
-                          <div className="font-bold text-slate-900">{swimmer.name}</div>
-                          <div className="font-mono text-[10px] text-sky-600 font-semibold">{swimmer.code}</div>
-                        </td>
-                        <td className="p-3">
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200">
-                            {swimmer.level}
+            {/* Quick Form: Add Swimmer Level After Workout */}
+            <form
+              onSubmit={handleRecordSingleSwimmerSession}
+              className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl space-y-3"
+            >
+              <div className="font-bold text-emerald-950 text-xs sm:text-sm flex items-center gap-1.5">
+                <Award className="w-4 h-4 text-emerald-600" />
+                <span>تسجيل تمرينة جديدة ومستوى اللاعب بعد التمرينة:</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1 text-[11px]">تاريخ التمرينة</label>
+                  <input
+                    type="date"
+                    required
+                    value={sessionForm.date}
+                    onChange={e => setSessionForm({ ...sessionForm, date: e.target.value })}
+                    className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1 text-[11px]">حالة الحضور في التمرينة</label>
+                  <select
+                    value={sessionForm.status}
+                    onChange={e => setSessionForm({ ...sessionForm, status: e.target.value as any })}
+                    className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none font-bold"
+                  >
+                    <option value="present">✓ حاضر بالتمرينة</option>
+                    <option value="absent">✕ غائب عن التمرينة</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-800 mb-1 text-[11px]">
+                  مستوى اللاعب بعد هذه التمرينة (اختر من القائمة أو اكتب المستوى الجديد) *
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={SWIMMER_LEVEL_PRESETS.includes(sessionForm.level_at_time) ? sessionForm.level_at_time : ''}
+                    onChange={e => {
+                      if (e.target.value) setSessionForm({ ...sessionForm, level_at_time: e.target.value });
+                    }}
+                    className="sm:w-1/2 p-2 bg-white border border-slate-200 rounded-xl outline-none font-semibold"
+                  >
+                    <option value="">اختر مستوى جاهز أو اكتب بالخانة المجاورة...</option>
+                    {SWIMMER_LEVEL_PRESETS.map(lvl => (
+                      <option key={lvl} value={lvl}>{lvl}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    required
+                    value={sessionForm.level_at_time}
+                    onChange={e => setSessionForm({ ...sessionForm, level_at_time: e.target.value })}
+                    placeholder="اكتب مستوى اللاعب بعد التمرينة..."
+                    className="sm:w-1/2 p-2 bg-white border border-emerald-300 rounded-xl outline-none font-bold text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                  تقييم وملاحظات الكابتن عن أداء اللاعب في التمرينة
+                </label>
+                <input
+                  type="text"
+                  value={sessionForm.evaluation_notes}
+                  onChange={e => setSessionForm({ ...sessionForm, evaluation_notes: e.target.value })}
+                  placeholder="مثال: أتقن ضربات الرجلين الحرة وتنفس جانبي لمسافة 25 متر..."
+                  className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingSession}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>{savingSession ? 'جاري الحفظ...' : 'حفظ التمرينة وتحديث مستوى اللاعب'}</span>
+              </button>
+            </form>
+
+            {/* History Table (The Roll-call Notebook) */}
+            <div>
+              <div className="font-bold text-slate-800 mb-2 flex items-center justify-between">
+                <span>سجل جميع التمرينات السابقة وتطور مستوى اللاعب ({swimmerHistoryLogs.length}):</span>
+              </div>
+
+              {historyLoading ? (
+                <div className="py-6 text-center text-slate-400">جاري قراءة كراسة السباح...</div>
+              ) : swimmerHistoryLogs.length === 0 ? (
+                <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl text-center text-slate-400">
+                  لم يتم تسجيل تمرينات سابقة لهذا السباح بعد.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {swimmerHistoryLogs.map(log => {
+                    const isPresent = log.status === 'present';
+                    return (
+                      <div
+                        key={log.id}
+                        className={`p-3 rounded-xl border transition-all ${
+                          isPresent
+                            ? 'bg-emerald-50/50 border-emerald-100'
+                            : 'bg-rose-50/50 border-rose-100'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isPresent ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
+                            }`}>
+                              {isPresent ? '✓ حاضر' : '✕ غائب'}
+                            </span>
+                            <span className="font-mono text-slate-700 font-bold">{log.date}</span>
+                            {log.level_at_time && (
+                              <span className="text-[11px] font-bold text-sky-800 bg-white px-2.5 py-0.5 rounded-lg border border-sky-200">
+                                المستوى بعد التمرينة: {log.level_at_time}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-400">
+                            بإشراف: <strong className="text-slate-600">{log.recorded_by_name}</strong>
                           </span>
-                        </td>
-                        <td className="p-3 font-semibold text-slate-800">
-                          {swimmer.assigned_coach_name || 'غير محدد'}
-                        </td>
-                        <td className="p-3">
-                          <div className="text-slate-900 font-medium">{swimmer.parent_name || 'ولي الأمر'}</div>
-                          <a
-                            href={`tel:${swimmer.parent_phone}`}
-                            className="font-mono text-sky-600 hover:underline text-[11px] font-bold block dir-ltr"
-                          >
-                            {swimmer.parent_phone}
-                          </a>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="inline-block px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold font-mono">
-                            {swimmer.total_attendances || 0}
-                          </span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="inline-block px-2 py-0.5 rounded-lg bg-rose-50 text-rose-700 font-bold font-mono">
-                            {swimmer.total_absences || 0}
-                          </span>
-                        </td>
-                        <td className="p-3 font-mono text-slate-500">
-                          {swimmer.last_attendance_date || 'لم يبدأ بعد'}
-                        </td>
-                        <td className="p-3 text-center">
-                          <button
-                            onClick={() => handleInspectSwimmer(swimmer)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 text-sky-700 hover:bg-sky-600 hover:text-white border border-sky-200 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            <span>فحص الكراسة</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                        </div>
+
+                        {log.evaluation_notes && (
+                          <div className="mt-2 text-[11px] text-slate-700 bg-white/80 p-2 rounded-lg border border-slate-200/60 leading-relaxed">
+                            <span className="font-bold text-slate-900">تقييم التمرينة: </span>
+                            {log.evaluation_notes}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
-      {/* ==================== MODAL 1: NEW TASK ==================== */}
+      {/* ==================== MODAL 3: HIRE NEW ASSISTANT / COACH (WHEN HIRING OPENS) ==================== */}
+      <Modal
+        isOpen={isHireAssistantModalOpen}
+        onClose={() => setIsHireAssistantModalOpen(false)}
+        title="إضافة مساعد مدرب / كابتن جديد (عند فتح باب العمل)"
+      >
+        <form onSubmit={handleHireSubmit} className="space-y-3.5 text-xs" dir="rtl">
+          {hireMsg && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 font-bold">
+              {hireMsg}
+            </div>
+          )}
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">اسم المساعد أو المدرب *</label>
+            <input
+              type="text"
+              required
+              value={hireForm.name}
+              onChange={e => setHireForm({ ...hireForm, name: e.target.value })}
+              placeholder="مثال: كابتن كريم محمد"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">رقم الهاتف *</label>
+              <input
+                type="tel"
+                required
+                value={hireForm.phone}
+                onChange={e => setHireForm({ ...hireForm, phone: e.target.value })}
+                placeholder="010XXXXXXXX"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+              />
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">البريد الإلكتروني *</label>
+              <input
+                type="email"
+                required
+                value={hireForm.email}
+                onChange={e => setHireForm({ ...hireForm, email: e.target.value })}
+                placeholder="assistant@aquapro.com"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">الوظيفة</label>
+              <select
+                value={hireForm.role}
+                onChange={e => setHireForm({ ...hireForm, role: e.target.value as any })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold"
+              >
+                <option value="assistant">⏱️ مساعد مدرب</option>
+                <option value="coach">🏊 مدرب سباحة</option>
+              </select>
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">المسمى الوظيفي</label>
+              <input
+                type="text"
+                value={hireForm.title}
+                onChange={e => setHireForm({ ...hireForm, title: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsHireAssistantModalOpen(false)}
+              className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold cursor-pointer"
+            >
+              إلغاء
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
+            >
+              تسجيل في المنظومة
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ==================== MODAL 4: NEW TASK ==================== */}
       <Modal
         isOpen={isNewTaskModalOpen}
         onClose={() => setIsNewTaskModalOpen(false)}
-        title="إسناد مهمة وتوجيه رسمي لكادر التدريب"
+        title="إسناد مهمة جديدة"
       >
-        <form onSubmit={handleCreateTask} className="space-y-4 text-xs">
+        <form onSubmit={handleCreateTask} className="space-y-4 text-xs" dir="rtl">
           <div>
             <label className="block font-bold text-slate-700 mb-1">عنوان المهمة *</label>
             <input
@@ -905,23 +1844,22 @@ export function HRDashboardView() {
               required
               value={newTaskForm.title}
               onChange={e => setNewTaskForm({ ...newTaskForm, title: e.target.value })}
-              placeholder="مثال: التركيز على مهارة الغوص وكتم النفس لمجموعة المبتدئين"
+              placeholder="مثال: تجهيز حارات التدريب في مسبح فندق السلام"
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
             />
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">إسناد إلى الكابتن / المساعد *</label>
+            <label className="block font-bold text-slate-700 mb-1">إسناد إلى *</label>
             <select
               required
               value={newTaskForm.assigned_to_user_id}
               onChange={e => setNewTaskForm({ ...newTaskForm, assigned_to_user_id: e.target.value })}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
             >
-              <option value="">اختر الموظف المكلف بالمهمة...</option>
-              {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(c => (
+              {staffList.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.role === 'coach' ? 'مدرب سباحة' : 'مساعد مدرب'})
+                  {c.name} ({c.title})
                 </option>
               ))}
             </select>
@@ -935,9 +1873,9 @@ export function HRDashboardView() {
                 onChange={e => setNewTaskForm({ ...newTaskForm, priority: e.target.value as any })}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
               >
-                <option value="normal">عادي (Normal)</option>
-                <option value="high">أولوية عالية (High)</option>
-                <option value="urgent">عاجل وفوري (Urgent)</option>
+                <option value="normal">عادي</option>
+                <option value="high">أولوية عالية</option>
+                <option value="urgent">عاجل وفوري</option>
               </select>
             </div>
             <div>
@@ -952,12 +1890,11 @@ export function HRDashboardView() {
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">تفاصيل التعليمات والملاحظات</label>
+            <label className="block font-bold text-slate-700 mb-1">تفاصيل المهمة</label>
             <textarea
               rows={3}
               value={newTaskForm.description}
               onChange={e => setNewTaskForm({ ...newTaskForm, description: e.target.value })}
-              placeholder="اكتب التوجيهات الفنية الدقيقة التي يجب على الكابتن تنفيذها في الحصة..."
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
             />
           </div>
@@ -974,56 +1911,52 @@ export function HRDashboardView() {
               type="submit"
               className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-md shadow-sky-600/30 cursor-pointer"
             >
-              إسناد المهمة فوراً
+              حفظ المهمة
             </button>
           </div>
         </form>
       </Modal>
 
-      {/* ==================== MODAL 2: NEW PENALTY / BONUS ==================== */}
+      {/* ==================== MODAL 5: NEW PENALTY / BONUS ==================== */}
       <Modal
         isOpen={isNewPenaltyModalOpen}
         onClose={() => setIsNewPenaltyModalOpen(false)}
-        title="إصدار جزاء إداري أو مكافأة تميز لكابتن"
+        title="تسجيل مكافأة أو جزاء إداري"
       >
-        <form onSubmit={handleCreatePenalty} className="space-y-4 text-xs">
+        <form onSubmit={handleCreatePenalty} className="space-y-4 text-xs" dir="rtl">
           <div>
-            <label className="block font-bold text-slate-700 mb-1">الموظف المعني *</label>
+            <label className="block font-bold text-slate-700 mb-1">الاسم *</label>
             <select
               required
               value={newPenaltyForm.user_id}
               onChange={e => setNewPenaltyForm({ ...newPenaltyForm, user_id: e.target.value })}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
             >
-              <option value="">اختر الكابتن أو المساعد...</option>
-              {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.role === 'coach' ? 'مدرب سباحة' : 'مساعد مدرب'})
-                </option>
+              {staffList.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">نوع المعاملة *</label>
+              <label className="block font-bold text-slate-700 mb-1">النوع *</label>
               <select
                 value={newPenaltyForm.type}
                 onChange={e => setNewPenaltyForm({ ...newPenaltyForm, type: e.target.value as any })}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
               >
-                <option value="penalty">خصم / جزاء مالي</option>
-                <option value="lateness">خصم تأخير عن التمرين</option>
                 <option value="bonus">مكافأة تميز وإنجاز</option>
+                <option value="penalty">خصم / جزاء مالي</option>
+                <option value="lateness">خصم تأخير</option>
               </select>
             </div>
             <div>
-              <label className="block font-bold text-slate-700 mb-1">المبلغ (بالجنيه المصري)</label>
+              <label className="block font-bold text-slate-700 mb-1">المبلغ (ج.م)</label>
               <input
                 type="number"
                 min="0"
                 step="25"
-                placeholder="مثال: 150"
                 value={newPenaltyForm.amount}
                 onChange={e => setNewPenaltyForm({ ...newPenaltyForm, amount: e.target.value })}
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
@@ -1032,13 +1965,12 @@ export function HRDashboardView() {
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">سبب القرار والمبرر الإداري *</label>
+            <label className="block font-bold text-slate-700 mb-1">البيان والسبب *</label>
             <textarea
               required
               rows={3}
               value={newPenaltyForm.reason}
               onChange={e => setNewPenaltyForm({ ...newPenaltyForm, reason: e.target.value })}
-              placeholder="اكتب أسباب الخصم أو المكافأة بدقة ليظهر للموظف في حسابه بشفافية..."
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
             />
           </div>
@@ -1053,256 +1985,12 @@ export function HRDashboardView() {
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold shadow-md shadow-rose-600/30 cursor-pointer"
+              className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold cursor-pointer"
             >
-              تسجيل القرار بالسجل
+              حفظ في السجل
             </button>
           </div>
         </form>
-      </Modal>
-
-      {/* ==================== MODAL 3: NEW SWIMMER ==================== */}
-      <Modal
-        isOpen={isNewSwimmerModalOpen}
-        onClose={() => setIsNewSwimmerModalOpen(false)}
-        title="إضافة وتسكين سباح جديد بالأكاديمية"
-      >
-        <form onSubmit={handleCreateSwimmer} className="space-y-4 text-xs">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">اسم السباح الرباعي *</label>
-              <input
-                type="text"
-                required
-                value={newSwimmerForm.name}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, name: e.target.value })}
-                placeholder="مثال: يوسف حسام عثمان"
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">النوع</label>
-              <select
-                value={newSwimmerForm.gender}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, gender: e.target.value as any })}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
-              >
-                <option value="male">ولد (ذكر)</option>
-                <option value="female">بنت (أنثى)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">المستوى الفني *</label>
-              <select
-                value={newSwimmerForm.level}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, level: e.target.value })}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
-              >
-                <option value="مبتدئ (Level 1)">مبتدئ (Level 1)</option>
-                <option value="مستوى متقدم (Level 2)">مستوى متقدم (Level 2)</option>
-                <option value="فراشة وزعانف (Level 3)">فراشة وزعانف (Level 3)</option>
-                <option value="فريق بطولات الأكاديمية">فريق بطولات الأكاديمية</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">الكابتن المسؤول عن تدريبه *</label>
-              <select
-                required
-                value={newSwimmerForm.assigned_coach_id}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, assigned_coach_id: e.target.value })}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 font-medium"
-              >
-                <option value="">اختر الكابتن أو المساعد...</option>
-                {staffList.filter(s => s.role === 'coach' || s.role === 'assistant').map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.role === 'coach' ? 'مدرب' : 'مساعد'})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">اسم ولي الأمر</label>
-              <input
-                type="text"
-                value={newSwimmerForm.parent_name}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, parent_name: e.target.value })}
-                placeholder="مثال: أ. حسام عثمان"
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">هاتف ولي الأمر (واتساب) *</label>
-              <input
-                type="tel"
-                required
-                value={newSwimmerForm.parent_phone}
-                onChange={e => setNewSwimmerForm({ ...newSwimmerForm, parent_phone: e.target.value })}
-                placeholder="010XXXXXXXX"
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو خاصة (حساسية / ربو)</label>
-            <input
-              type="text"
-              value={newSwimmerForm.health_notes}
-              onChange={e => setNewSwimmerForm({ ...newSwimmerForm, health_notes: e.target.value })}
-              placeholder="اكتب أي ملاحظة صحية ليعرفها المدرب أثناء التمرين..."
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none font-medium"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setIsNewSwimmerModalOpen(false)}
-              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
-            >
-              إلغاء
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold shadow-md shadow-sky-600/30 cursor-pointer"
-            >
-              حفظ وتسكين السباح
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* ==================== MODAL 4: SWIMMER ROLL-CALL INSPECTION NOTEBOOK (PARENT COMPLAINT HUB) ==================== */}
-      <Modal
-        isOpen={!!inspectingSwimmer}
-        onClose={() => setInspectingSwimmer(null)}
-        title={`كراسة الغياب وسجل السباح: ${inspectingSwimmer?.name || ''}`}
-      >
-        {inspectingSwimmer && (
-          <div className="space-y-4 text-xs">
-            {/* Swimmer Overview Header */}
-            <div className="p-4 bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-100 rounded-2xl flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-900 text-sm">{inspectingSwimmer.name}</div>
-                <div className="text-slate-500 text-[11px] flex items-center gap-2 mt-0.5">
-                  <span className="font-mono text-sky-700 font-bold">كود: {inspectingSwimmer.code}</span>
-                  <span>•</span>
-                  <span>الكابتن: <strong className="text-slate-800">{inspectingSwimmer.assigned_coach_name}</strong></span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 bg-white border border-sky-200 rounded-xl text-sky-800 font-bold text-xs shadow-sm">
-                  المستوى الحالي: {inspectingSwimmer.level}
-                </span>
-                <a
-                  href={`tel:${inspectingSwimmer.parent_phone}`}
-                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center gap-1 shadow-sm"
-                >
-                  <Phone className="w-3.5 h-3.5" />
-                  <span>اتصال بولي الأمر</span>
-                </a>
-              </div>
-            </div>
-
-            {/* Attendance Summary Counters */}
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-xl">
-                <div className="text-[10px] text-emerald-700 font-medium">مرات الحضور الفعلي</div>
-                <div className="text-base font-black text-emerald-800 font-mono mt-0.5">
-                  {swimmerHistoryLogs.filter(l => l.status === 'present').length} حصة
-                </div>
-              </div>
-              <div className="p-2.5 bg-rose-50 border border-rose-100 rounded-xl">
-                <div className="text-[10px] text-rose-700 font-medium">مرات الغياب المثبتة</div>
-                <div className="text-base font-black text-rose-800 font-mono mt-0.5">
-                  {swimmerHistoryLogs.filter(l => l.status === 'absent').length} غياب
-                </div>
-              </div>
-              <div className="p-2.5 bg-sky-50 border border-sky-100 rounded-xl">
-                <div className="text-[10px] text-sky-700 font-medium">إجمالي الحصص المسجلة</div>
-                <div className="text-base font-black text-sky-800 font-mono mt-0.5">
-                  {swimmerHistoryLogs.length} جلسة
-                </div>
-              </div>
-            </div>
-
-            {/* History Table (The Roll-call Notebook) */}
-            <div>
-              <div className="font-bold text-slate-800 mb-2 flex items-center justify-between">
-                <span>سجل الحصص التاريخي وملاحظات المدرب (كراسة الغياب):</span>
-                <span className="text-[10px] text-slate-400">مرتبة من الأحدث إلى الأقدم</span>
-              </div>
-
-              {historyLoading ? (
-                <div className="py-8 text-center text-slate-400">جاري قراءة كراسة الغياب وسجلات الحصص...</div>
-              ) : swimmerHistoryLogs.length === 0 ? (
-                <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl text-center text-slate-400">
-                  لم يسجل المدرب أي حضور أو غياب لهذا السباح حتى الآن.
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                  {swimmerHistoryLogs.map(log => {
-                    const isPresent = log.status === 'present';
-                    return (
-                      <div
-                        key={log.id}
-                        className={`p-3 rounded-xl border transition-all ${
-                          isPresent
-                            ? 'bg-emerald-50/50 border-emerald-100'
-                            : 'bg-rose-50/50 border-rose-100'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              isPresent ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'
-                            }`}>
-                              {isPresent ? '✓ حاضر بالتمرين' : '✕ غائب'}
-                            </span>
-                            <span className="font-mono text-slate-700 font-bold">{log.date}</span>
-                            {log.level_at_time && (
-                              <span className="text-[10px] text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
-                                المستوى: {log.level_at_time}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[10px] text-slate-400">
-                            سجلها: <strong className="text-slate-600">{log.recorded_by_name}</strong>
-                          </span>
-                        </div>
-
-                        {log.evaluation_notes && (
-                          <div className="mt-2 text-[11px] text-slate-700 bg-white/80 p-2 rounded-lg border border-slate-200/60 leading-relaxed">
-                            <span className="font-bold text-slate-900">ملاحظة الكابتن الفنية: </span>
-                            {log.evaluation_notes}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setInspectingSwimmer(null)}
-                className="px-5 py-2 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all cursor-pointer"
-              >
-                إغلاق الكراسة
-              </button>
-            </div>
-          </div>
-        )}
       </Modal>
     </div>
   );

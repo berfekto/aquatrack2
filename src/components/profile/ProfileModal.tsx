@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/ui/Modal';
 import {
@@ -14,6 +14,8 @@ import {
   Lock,
   Sparkles,
   Save,
+  Camera,
+  Upload,
   X
 } from 'lucide-react';
 
@@ -32,9 +34,11 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
+  const [avatar, setAvatar] = useState('');
   const [profileSuccess, setProfileSuccess] = useState('');
   const [profileError, setProfileError] = useState('');
   const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Password fields state
   const [oldPassword, setOldPassword] = useState('');
@@ -49,6 +53,7 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
       setName(currentUser.name || '');
       setTitle(currentUser.title || '');
       setPhone(currentUser.phone || '');
+      setAvatar(currentUser.avatar || '');
       setProfileSuccess('');
       setProfileError('');
       setPassSuccess('');
@@ -59,6 +64,43 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
       setActiveTab(defaultTab);
     }
   }, [currentUser, isOpen, defaultTab]);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = event => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxSize = 260;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > maxSize) {
+            height = Math.round((height * maxSize) / width);
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = Math.round((width * maxSize) / height);
+            height = maxSize;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          setAvatar(dataUrl);
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,10 +119,11 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
         name: name.trim(),
         title: title.trim(),
         phone: phone.trim(),
+        avatar: avatar.trim(),
       });
 
       if (res.success) {
-        setProfileSuccess('تم حفظ وتحديث بياناتك بنجاح!');
+        setProfileSuccess('✅ تم حفظ صورتك الشخصية وبياناتك بنجاح!');
         setTimeout(() => {
           setProfileSuccess('');
         }, 3000);
@@ -128,34 +171,54 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="الملف الشخصي وإعدادات الحساب"
-      subtitle="تعديل اسم المدير العام، بيانات التواصل، وكلمة المرور"
+      title="الملف الشخصي والصورة وإعدادات الحساب"
+      subtitle="تعديل الصورة الشخصية، الاسم، بيانات التواصل، وكلمة المرور"
       maxWidth="md"
     >
       <div className="space-y-4" dir="rtl">
-        {/* User Quick Identity Card */}
-        <div className="bg-gradient-to-r from-sky-50 via-cyan-50 to-white p-3.5 rounded-2xl border border-sky-100 flex items-center gap-3">
-          <div className="relative shrink-0">
+        {/* User Quick Identity Card with Photo Upload */}
+        <div className="bg-gradient-to-r from-sky-50 via-cyan-50 to-white p-3.5 rounded-2xl border border-sky-100 flex items-center gap-3.5">
+          <div className="relative shrink-0 group">
             <img
-              src={currentUser?.avatar || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150'}
+              src={avatar || currentUser?.avatar || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150'}
               alt={currentUser?.name || 'User'}
-              className="w-12 h-12 rounded-2xl object-cover border-2 border-white shadow-sm"
+              className="w-16 h-16 rounded-2xl object-cover border-2 border-white shadow-md"
             />
-            <span className="absolute -bottom-1 -left-1 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full" />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute inset-0 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-2xl flex flex-col items-center justify-center transition-all cursor-pointer"
+              title="تغيير الصورة الشخصية"
+            >
+              <Camera className="w-5 h-5" />
+              <span className="text-[9px] font-bold mt-0.5">تغيير</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleImageUpload}
+              className="hidden"
+            />
           </div>
           <div className="min-w-0 flex-1">
             <div className="font-bold text-slate-900 text-sm truncate flex items-center gap-1.5">
-              <span>{currentUser?.name}</span>
+              <span>{name || currentUser?.name}</span>
               <span className="text-[10px] bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full font-bold shrink-0">
-                {currentUser?.role === 'super_admin' ? 'المدير العام' : currentUser?.role}
+                {currentUser?.role === 'super_admin' ? 'المدير العام' : currentUser?.role === 'hr' ? 'HR' : 'كابتن'}
               </span>
             </div>
             <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
-              {currentUser?.title || 'إدارة منظومة الأكاديميات'}
+              {title || currentUser?.title || 'إدارة منظومة الأكاديميات'}
             </div>
-            <div className="text-[11px] text-slate-600 font-mono mt-0.5 truncate">
-              {currentUser?.phone || currentUser?.email}
-            </div>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold rounded-lg shadow-xs transition-all cursor-pointer"
+            >
+              <Upload className="w-3 h-3" />
+              <span>رفع صورة شخصية من الهاتف / الكمبيوتر</span>
+            </button>
           </div>
         </div>
 
@@ -171,7 +234,7 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
             }`}
           >
             <User className="w-4 h-4" />
-            <span>بيانات المدير العام</span>
+            <span>البيانات والصورة الشخصية</span>
           </button>
           <button
             type="button"
@@ -273,7 +336,7 @@ export function ProfileModal({ isOpen, onClose, defaultTab = 'profile' }: Profil
                 className="px-5 py-2.5 bg-sky-600 hover:bg-sky-500 active:scale-95 text-white rounded-xl font-bold text-xs shadow-md shadow-sky-600/20 transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 <Save className="w-4 h-4" />
-                <span>{profileSubmitting ? 'جاري الحفظ...' : 'حفظ اسم وبيانات المدير'}</span>
+                <span>{profileSubmitting ? 'جاري الحفظ...' : 'حفظ الصورة والبيانات'}</span>
               </button>
             </div>
           </form>

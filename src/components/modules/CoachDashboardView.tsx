@@ -51,8 +51,12 @@ export function CoachDashboardView() {
   const loadAssignedSwimmers = useCallback(async () => {
     if (!currentUser) return;
     try {
-      // Query swimmers assigned to this coach/assistant
-      const res = await fetch(`/api/swimmers?coachId=${currentUser.id}`);
+      // Query swimmers assigned to this coach/assistant (or all if super_admin/hr)
+      const queryParam =
+        currentUser.role === 'coach' || currentUser.role === 'assistant'
+          ? `?coachId=${currentUser.id}`
+          : '';
+      const res = await fetch(`/api/swimmers${queryParam}`);
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
@@ -60,7 +64,7 @@ export function CoachDashboardView() {
           setAssignedSwimmers(list);
 
           // Also check if logs already exist for this date
-          const logsRes = await fetch(`/api/swimmer-logs?date=${selectedDate}&coachId=${currentUser.id}`);
+          const logsRes = await fetch(`/api/swimmer-logs?date=${selectedDate}`);
           let existingLogs: SwimmerLog[] = [];
           if (logsRes.ok) {
             const logsData = await logsRes.json();
@@ -441,28 +445,45 @@ export function CoachDashboardView() {
                     }`}
                   >
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      {/* Swimmer Info & Code */}
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 text-sm sm:text-base">
-                            {swimmer.name}
-                          </span>
-                          <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">
-                            {swimmer.code}
-                          </span>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                          <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
-                          <span>•</span>
-                          <a href={`tel:${swimmer.parent_phone}`} className="font-mono text-sky-600 hover:underline font-bold dir-ltr">
-                            {swimmer.parent_phone}
-                          </a>
-                          {swimmer.health_notes && (
-                            <span className="bg-amber-50 text-amber-800 px-2 py-0.5 rounded-md font-semibold text-[10px]">
-                              ⚠️ {swimmer.health_notes}
+                      {/* Swimmer Photo, Info, Subscription & Branch */}
+                      <div className="min-w-0 flex items-center gap-3.5">
+                        <img
+                          src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                          alt={swimmer.name}
+                          className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-xs shrink-0"
+                        />
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-900 text-sm sm:text-base">
+                              {swimmer.name}
                             </span>
-                          )}
+                            <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">
+                              {swimmer.code}
+                            </span>
+                            {swimmer.subscription_type && (
+                              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg">
+                                💳 {swimmer.subscription_type}
+                              </span>
+                            )}
+                            {swimmer.branch_name && (
+                              <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded-lg">
+                                📍 {swimmer.branch_name}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                            <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
+                            <span>•</span>
+                            <a href={`tel:${swimmer.parent_phone}`} className="font-mono text-sky-600 hover:underline font-bold dir-ltr">
+                              {swimmer.parent_phone}
+                            </a>
+                            {swimmer.health_notes && (
+                              <span className="bg-amber-50 text-amber-800 px-2 py-0.5 rounded-md font-semibold text-[10px]">
+                                ⚠️ {swimmer.health_notes}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -496,31 +517,45 @@ export function CoachDashboardView() {
                       </div>
                     </div>
 
-                    {/* Level Selector & Technical Notes Row */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 pt-3 border-t border-slate-100 text-xs">
-                      <div>
+                    {/* Post-Workout Level & Technical Notes Row */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-4 pt-3 border-t border-slate-100 text-xs">
+                      <div className="md:col-span-3">
                         <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          تحديث المستوى الفني للسباح:
+                          اختيار مستوى جاهز بعد التمرينة:
                         </label>
                         <select
                           value={current.level}
                           onChange={e => handleSwimmerLevelChange(swimmer.id, e.target.value)}
                           className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-slate-800"
                         >
-                          <option value="مبتدئ (Level 1)">مبتدئ (Level 1)</option>
-                          <option value="مستوى متقدم (Level 2)">مستوى متقدم (Level 2)</option>
-                          <option value="فراشة وزعانف (Level 3)">فراشة وزعانف (Level 3)</option>
-                          <option value="فريق بطولات الأكاديمية">فريق بطولات الأكاديمية</option>
+                          <option value="المستوى 1: كسر حاجز الخوف والطفو">المستوى 1: كسر حاجز الخوف والطفو</option>
+                          <option value="المستوى 2: ضربات الرجلين والانسياب">المستوى 2: ضربات الرجلين والانسياب</option>
+                          <option value="المستوى 3: السباحة الحرة والتنفس الجانبي">المستوى 3: السباحة الحرة والتنفس الجانبي</option>
+                          <option value="المستوى 4: سباحة الظهر والفراشة">المستوى 4: سباحة الظهر والفراشة</option>
+                          <option value="المستوى 5: فريق السرعات والبطولات">المستوى 5: فريق السرعات والبطولات</option>
                         </select>
                       </div>
 
-                      <div className="md:col-span-2">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          ملاحظة الكابتن الفنية في تمرين اليوم (تُسجل في كراسة السباح لـ HR):
+                      <div className="md:col-span-4">
+                        <label className="block text-[11px] font-bold text-teal-800 mb-1">
+                          ✍️ أو اكتب مستوى اللاعب بعد تمرينة اليوم مباشرة:
                         </label>
                         <input
                           type="text"
-                          placeholder="مثال: أتقن ضربات الرجلين والطفو، يحتاج تقوية عضلات الذراعين..."
+                          placeholder="اكتب المستوى الذي وصل له اللاعب بعد التمرينة..."
+                          value={current.level}
+                          onChange={e => handleSwimmerLevelChange(swimmer.id, e.target.value)}
+                          className="w-full p-2 bg-teal-50/50 border border-teal-200 rounded-xl outline-none text-slate-900 font-bold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-5">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          ملاحظة وتقييم الكابتن في تمرينة اليوم:
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="مثال: أتقن ضربات الرجلين لمسافة 25 متر ويحتاج تحسين النفس الجانبي..."
                           value={current.notes}
                           onChange={e => handleSwimmerNoteChange(swimmer.id, e.target.value)}
                           className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-800 font-medium"

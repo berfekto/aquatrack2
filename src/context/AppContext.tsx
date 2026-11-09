@@ -90,7 +90,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Fetch staff list for role switcher & assignment
+  // Fetch staff list for assignment & sync current user profile
   const refreshStaffList = useCallback(async () => {
     try {
       const res = await fetch('/api/auth?staff_only=true');
@@ -98,6 +98,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const data = await res.json();
         if (data.success && data.staff) {
           setStaffList(data.staff);
+          setCurrentUser(prev => {
+            if (!prev) return null;
+            const latest = (data.staff as StaffUserItem[]).find(u => u.id === prev.id);
+            if (latest) {
+              const merged = { ...prev, name: latest.name, title: latest.title, avatar: latest.avatar, phone: latest.phone, email: latest.email };
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+              } catch {}
+              return merged;
+            }
+            return prev;
+          });
         }
       }
     } catch (e) {

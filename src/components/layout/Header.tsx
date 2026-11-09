@@ -76,92 +76,22 @@ export function Header({ onOpenQuickModal }: HeaderProps) {
             <Menu className="w-5 h-5" />
           </button>
 
-          {/* Current Branch Display / Selector (Only for Super Admin to filter branches, Coaches stay on their branch) */}
-          {currentRole === 'super_admin' ? (
-            <div className="hidden sm:flex items-center gap-1.5 sm:gap-2 bg-slate-50 border border-slate-200/90 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs text-slate-700 truncate">
-              <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-600 shrink-0" />
-              <select
-                value={currentAcademyId}
-                onChange={e => setCurrentAcademyId(e.target.value)}
-                className="bg-transparent font-semibold text-slate-800 outline-none cursor-pointer text-xs max-w-[140px] sm:max-w-[200px] truncate"
-              >
-                <option value="all">🏢 جميع الفروع المركزية</option>
-                {academies.map(acad => (
-                  <option key={acad.id} value={acad.id}>
-                    🏊 {acad.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 bg-sky-50 text-sky-900 border border-sky-200 rounded-xl px-2.5 py-1 text-xs font-bold truncate">
-              <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse shrink-0" />
-              <span className="truncate">
-                {currentUser?.academy_name || 'الأكاديمية الأولمبية'}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Center: Quick RBAC Role & Staff Switcher Bar (For Development & Live Testing) */}
-        <div className="hidden md:flex items-center gap-1 bg-slate-100/90 border border-slate-200/90 p-1 rounded-2xl shadow-xs">
-          <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500 px-2">
-            <ArrowLeftRight className="w-3.5 h-3.5 text-sky-600" />
-            <span className="hidden xl:inline">التبديل الفوري:</span>
-          </div>
-
-          <button
-            onClick={() => switchUser('user-hr')}
-            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              currentUser?.role === 'hr' || currentUser?.role === 'super_admin' || currentUser?.role === 'admin'
-                ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-500'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="تبديل إلى حساب مسؤول الموارد البشرية HR"
-          >
-            👑 HR / الإدارة
-          </button>
-
-          <button
-            onClick={() => switchUser('user-coach-1')}
-            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              currentUser?.id === 'user-coach-1'
-                ? 'bg-teal-600 text-white shadow-sm ring-1 ring-teal-500'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="تبديل إلى كابتن أحمد (مدرب)"
-          >
-            🏊 كابتن أحمد (مدرب)
-          </button>
-
-          <button
-            onClick={() => switchUser('user-asst-1')}
-            className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              currentUser?.id === 'user-asst-1'
-                ? 'bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-500'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="تبديل إلى كابتن مصطفى (مساعد مدرب)"
-          >
-            ⏱️ كابتن مصطفى (مساعد)
-          </button>
-
-          {/* Quick Select for all registered staff */}
-          {staffList.length > 0 && (
+          {/* Current Branch Display / Selector */}
+          <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-50 border border-slate-200/90 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs text-slate-700 truncate">
+            <MapPin className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-sky-600 shrink-0" />
             <select
-              value={currentUser?.id || ''}
-              onChange={e => switchUser(e.target.value)}
-              className="bg-transparent text-[11px] font-bold text-slate-700 outline-none cursor-pointer pr-1 border-r border-slate-200 mr-1 max-w-[130px] truncate"
-              title="اختر أي موظف من القائمة للتبديل الفوري"
+              value={currentAcademyId}
+              onChange={e => setCurrentAcademyId(e.target.value)}
+              className="bg-transparent font-semibold text-slate-800 outline-none cursor-pointer text-xs max-w-[180px] sm:max-w-[260px] truncate"
             >
-              <option value="" disabled>المزيد من الكادر...</option>
-              {staffList.map(st => (
-                <option key={st.id} value={st.id}>
-                  {st.name} ({st.role === 'coach' ? 'مدرب' : st.role === 'assistant' ? 'مساعد' : st.role === 'hr' ? 'HR' : 'إدارة'})
+              <option value="all">📍 مطروح: فندق السلام & النادي الاجتماعي</option>
+              {academies.map(acad => (
+                <option key={acad.id} value={acad.id}>
+                  🏊 {acad.name}
                 </option>
               ))}
             </select>
-          )}
+          </div>
         </div>
 
         {/* Right Side: Quick Actions, Notifications, User Profile & Logout */}
@@ -348,7 +278,7 @@ export function Header({ onOpenQuickModal }: HeaderProps) {
                     className="w-full text-right p-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-sky-50 hover:text-sky-800 transition-colors flex items-center gap-2 cursor-pointer"
                   >
                     <UserIcon className="w-4 h-4 text-sky-600 shrink-0" />
-                    <span>تعديل اسم وبيانات الحساب</span>
+                    <span>تعديل البيانات والصورة الشخصية</span>
                   </button>
 
                   <button

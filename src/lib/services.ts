@@ -20,7 +20,8 @@ import {
   Task,
   StaffLog,
   Swimmer,
-  SwimmerLog
+  SwimmerLog,
+  SubscriptionPlan
 } from './types';
 import { verifyPassword, hashPassword, needsRehash } from './auth';
 
@@ -1338,14 +1339,21 @@ export function updateUserProfile(
       WHERE id = ?
     `).run(newName, newPhone, newTitle, newEmail, newAvatar, userId);
 
-    // If linked to staff record, keep name and phone synced
+    // If linked to staff record, keep name, phone, and avatar synced
     if (user.staff_id) {
       db.prepare(`
         UPDATE staff 
-        SET name = ?, phone = ? 
+        SET name = ?, phone = ?, avatar = ? 
         WHERE id = ?
-      `).run(newName, newPhone, user.staff_id);
+      `).run(newName, newPhone, newAvatar, user.staff_id);
     }
+
+    // Keep coach name synced in swimmers
+    db.prepare(`
+      UPDATE swimmers
+      SET assigned_coach_name = ?
+      WHERE assigned_coach_id = ?
+    `).run(newName, userId);
 
     const updatedUser = getUserById(userId);
     return { success: true, user: updatedUser };
@@ -1763,8 +1771,9 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
   db.prepare(`
     INSERT INTO swimmers (
       id, name, code, birth_date, gender, parent_name, parent_phone, emergency_phone,
-      level, assigned_coach_id, assigned_coach_name, group_name, health_notes, status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      level, subscription_type, branch_name, avatar,
+      assigned_coach_id, assigned_coach_name, group_name, health_notes, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -1775,8 +1784,11 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
     data.parent_phone,
     data.emergency_phone || '',
     data.level,
+    data.subscription_type || 'اشتراك شهري تأسيسي (8 حصص)',
+    data.branch_name || 'فندق السلام للقوات المسلحة - مطروح',
+    data.avatar || '',
     data.assigned_coach_id,
-    coach?.name || '',
+    coach?.name || 'كابتن أسامة هيثم مصطفى',
     data.group_name || '',
     data.health_notes || '',
     data.status || 'active',
@@ -1800,6 +1812,9 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
     UPDATE swimmers SET
       name = COALESCE(?, name),
       level = COALESCE(?, level),
+      subscription_type = COALESCE(?, subscription_type),
+      branch_name = COALESCE(?, branch_name),
+      avatar = COALESCE(?, avatar),
       assigned_coach_id = COALESCE(?, assigned_coach_id),
       assigned_coach_name = COALESCE(?, assigned_coach_name),
       parent_phone = COALESCE(?, parent_phone),
@@ -1812,6 +1827,9 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
   `).run(
     data.name !== undefined ? data.name : null,
     data.level !== undefined ? data.level : null,
+    data.subscription_type !== undefined ? data.subscription_type : null,
+    data.branch_name !== undefined ? data.branch_name : null,
+    data.avatar !== undefined ? data.avatar : null,
     data.assigned_coach_id !== undefined ? data.assigned_coach_id : null,
     coachName,
     data.parent_phone !== undefined ? data.parent_phone : null,
@@ -1824,6 +1842,45 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
   );
 
   return getSwimmerById(id)!;
+}
+
+export function deleteSwimmer(id: string): boolean {
+  db.prepare('DELETE FROM swimmers WHERE id = ?').run(id);
+  return true;
+}
+
+// --- SUBSCRIPTION PLANS (CONFIGURABLE FROM SETTINGS) ---
+export function getSubscriptionPlans(): SubscriptionPlan[] {
+  return db.prepare('SELECT * FROM subscription_plans ORDER BY price ASC, created_at ASC').all() as SubscriptionPlan[];
+}
+
+export function createSubscriptionPlan(data: {
+  name: string;
+  price?: number;
+  sessions_count?: number;
+  duration_days?: number;
+  description?: string;
+}): SubscriptionPlan {
+  const id = `plan-${Date.now()}`;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO subscription_plans (id, name, price, sessions_count, duration_days, description, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    data.name.trim(),
+    Number(data.price) || 0,
+    Number(data.sessions_count) || 8,
+    Number(data.duration_days) || 30,
+    data.description || '',
+    now
+  );
+  return db.prepare('SELECT * FROM subscription_plans WHERE id = ?').get(id) as SubscriptionPlan;
+}
+
+export function deleteSubscriptionPlan(id: string): boolean {
+  db.prepare('DELETE FROM subscription_plans WHERE id = ?').run(id);
+  return true;
 }
 
 // --- SWIMMER LOGS (ROLL CALL & NOTEBOOK) ---

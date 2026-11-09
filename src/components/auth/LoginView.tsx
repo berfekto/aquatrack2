@@ -50,12 +50,11 @@ export function LoginView() {
   const [showCredentialsGuide, setShowCredentialsGuide] = useState(false);
   const [isMobileModalOpen, setIsMobileModalOpen] = useState(false);
 
-  // Quick staff demo accounts
+  // Quick partner accounts
   const demoAccounts = [
-    { name: 'أستاذة سارة المنشاوي', role: 'مسؤول HR', roleKey: 'hr', phone: '01005556677', pass: '123456', icon: '👑' },
-    { name: 'كابتن أحمد سامي', role: 'مدرب سباحة', roleKey: 'coach', phone: '01001112233', pass: '123456', icon: '🏊' },
-    { name: 'كابتن مصطفى كامل', role: 'مساعد مدرب', roleKey: 'assistant', phone: '01007778899', pass: '123456', icon: '⏱️' },
-    { name: 'د. حسام عثمان', role: 'المدير العام', roleKey: 'super_admin', phone: '01000000001', pass: '123456', icon: '🏢' },
+    { name: 'مصطفى محمد فتحي', role: 'الشريك والمدير التنفيذي العام', roleKey: 'super_admin', phone: '01000000001', pass: '123456', icon: '🏢' },
+    { name: 'يوسف سمير مصطفى', role: 'الشريك ومسؤول الموارد البشرية (HR)', roleKey: 'hr', phone: '01005556677', pass: '123456', icon: '👑' },
+    { name: 'كابتن أسامة هيثم مصطفى', role: 'الشريك وكبير مدربي السباحة', roleKey: 'coach', phone: '01001112233', pass: '123456', icon: '🏊' },
   ];
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -155,10 +154,10 @@ export function LoginView() {
             <span>نظام تسجيل الدخول الموحد للكادر الإداري والتدريبي</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-black text-white">
-            منظومة أكوا برو الموحدة (HR & التدريب)
+            منظومة أكوا برو - مرسى مطروح
           </h1>
           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-            بوابة الدخول المخصصة لمسؤولي الموارد البشرية، المدربين، ومساعدي المدربين
+            فندق السلام للقوات المسلحة & النادي الاجتماعي بمرسى مطروح
           </p>
         </div>
 
@@ -371,25 +370,25 @@ export function LoginView() {
           </form>
         )}
 
-        {/* Quick 1-Click Demo Login Bar */}
+        {/* Quick 1-Click Partner Login Bar */}
         <div className="mt-5 border border-slate-800 rounded-2xl bg-slate-900/60 p-3.5 space-y-2">
           <div className="flex items-center justify-between text-xs text-slate-400 font-bold pb-2 border-b border-slate-800">
-            <span>⚡ تسجيل دخول سريع بنقرة واحدة (للتجربة والاختبار):</span>
+            <span>⚡ الشركاء المؤسسون (تعبئة بيانات الدخول):</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
             {demoAccounts.map((acc, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => handleFillAccount(acc.phone, acc.pass)}
-                className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 text-right transition-all cursor-pointer group"
+                className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 text-right transition-all cursor-pointer group"
               >
                 <div className="text-xs font-bold text-white group-hover:text-sky-300 flex items-center gap-1.5">
                   <span>{acc.icon}</span>
                   <span className="truncate">{acc.name}</span>
                 </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">{acc.role}</div>
+                <div className="text-[10px] text-slate-400 mt-0.5 truncate">{acc.role}</div>
               </button>
             ))}
           </div>

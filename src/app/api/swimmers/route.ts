@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSwimmers, getSwimmerById, createSwimmer, updateSwimmer } from '@/lib/services';
+import { getSwimmers, getSwimmerById, createSwimmer, updateSwimmer, deleteSwimmer } from '@/lib/services';
 
 export async function GET(req: NextRequest) {
   try {
@@ -31,6 +31,9 @@ export async function POST(req: NextRequest) {
     const {
       name,
       level,
+      subscription_type,
+      branch_name,
+      avatar,
       assigned_coach_id,
       parent_phone,
       parent_name,
@@ -55,7 +58,10 @@ export async function POST(req: NextRequest) {
       name: name.trim(),
       code: body.code,
       status: body.status || 'active',
-      level: level || 'مبتدئ (Level 1)',
+      level: level || 'المستوى 1: كسر حاجز الخوف والطفو',
+      subscription_type: subscription_type || 'اشتراك شهري تأسيسي (8 حصص)',
+      branch_name: branch_name || 'فندق السلام للقوات المسلحة - مطروح',
+      avatar: avatar || '',
       assigned_coach_id,
       parent_phone: parent_phone.trim(),
       parent_name: parent_name?.trim() || '',
@@ -83,6 +89,20 @@ export async function PUT(req: NextRequest) {
 
     const updated = updateSwimmer(id, data);
     return NextResponse.json({ success: true, swimmer: updated });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json({ success: false, error: 'معرف السباح مطلوب' }, { status: 400 });
+    }
+    deleteSwimmer(id);
+    return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

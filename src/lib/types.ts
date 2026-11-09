@@ -304,6 +304,16 @@ export interface StaffLog {
   created_at: string;
 }
 
+export interface SubscriptionPlan {
+  id: string;
+  name: string;
+  price: number;
+  sessions_count: number;
+  duration_days: number;
+  description?: string;
+  created_at: string;
+}
+
 export interface Swimmer {
   id: string;
   name: string;
@@ -314,6 +324,9 @@ export interface Swimmer {
   parent_phone: string;
   emergency_phone?: string;
   level: string;
+  subscription_type?: string;
+  branch_name?: string;
+  avatar?: string;
   assigned_coach_id: string;
   assigned_coach_name?: string;
   group_name?: string;
