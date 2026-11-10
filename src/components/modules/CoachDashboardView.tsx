@@ -19,26 +19,22 @@ import {
   AlertCircle,
   TrendingUp,
   ShieldCheck,
-  DollarSign
+  DollarSign,
+  BellRing,
+  MapPin
 } from 'lucide-react';
-import { Task, StaffLog, Swimmer, SwimmerLog } from '@/lib/types';
+import { Task, StaffLog, Swimmer, CoachBriefing } from '@/lib/types';
 
 export function CoachDashboardView() {
   const { currentUser } = useApp();
 
   const [activeTab, setActiveTab] = useState<'roll_call' | 'my_tasks' | 'my_record'>('roll_call');
   const [loading, setLoading] = useState(false);
-  const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
 
-  // --- 1. Swimmer Roll Call State ---
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  // --- 1. Pre-Workout Group Level Briefings (Sent automatically night before training) ---
   const [assignedSwimmers, setAssignedSwimmers] = useState<Swimmer[]>([]);
-  // Local roll call state map: swimmer_id -> { status: 'present' | 'absent', level: string, notes: string }
-  const [rollCallState, setRollCallState] = useState<Record<string, {
-    status: 'present' | 'absent';
-    level: string;
-    notes: string;
-  }>>({});
+  const [briefings, setBriefings] = useState<CoachBriefing[]>([]);
+  const [selectedDaysFilter, setSelectedDaysFilter] = useState<string>('all');
 
   // --- 2. My Tasks State ---
   const [myTasks, setMyTasks] = useState<Task[]>([]);
@@ -47,49 +43,32 @@ export function CoachDashboardView() {
   // --- 3. My HR Record State ---
   const [myStaffLogs, setMyStaffLogs] = useState<StaffLog[]>([]);
 
-  // Load Assigned Swimmers
+  // Load Assigned Swimmers & Night-Before Level Briefings
   const loadAssignedSwimmers = useCallback(async () => {
     if (!currentUser) return;
     try {
-      // Query swimmers assigned to this coach/assistant (or all if super_admin/hr)
       const queryParam =
         currentUser.role === 'coach' || currentUser.role === 'assistant'
           ? `?coachId=${currentUser.id}`
           : '';
-      const res = await fetch(`/api/swimmers${queryParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          const list: Swimmer[] = data.swimmers;
-          setAssignedSwimmers(list);
-
-          // Also check if logs already exist for this date
-          const logsRes = await fetch(`/api/swimmer-logs?date=${selectedDate}`);
-          let existingLogs: SwimmerLog[] = [];
-          if (logsRes.ok) {
-            const logsData = await logsRes.json();
-            if (logsData.success) existingLogs = logsData.logs;
-          }
-
-          const existingMap = new Map(existingLogs.map(l => [l.swimmer_id, l]));
-
-          // Initialize local roll-call state
-          const initialMap: Record<string, { status: 'present' | 'absent'; level: string; notes: string }> = {};
-          list.forEach(swimmer => {
-            const existing = existingMap.get(swimmer.id);
-            initialMap[swimmer.id] = {
-              status: existing ? existing.status : 'present',
-              level: existing?.level_at_time || swimmer.level,
-              notes: existing?.evaluation_notes || '',
-            };
-          });
-          setRollCallState(initialMap);
+      const [swimmersRes, logsRes] = await Promise.all([
+        fetch(`/api/swimmers${queryParam}`),
+        fetch(`/api/swimmer-logs${queryParam}`),
+      ]);
+      if (swimmersRes.ok) {
+        const data = await swimmersRes.json();
+        if (data.success) setAssignedSwimmers(data.swimmers || []);
+      }
+      if (logsRes.ok) {
+        const logsData = await logsRes.json();
+        if (logsData.success && logsData.briefings) {
+          setBriefings(logsData.briefings);
         }
       }
     } catch (e) {
       console.error(e);
     }
-  }, [currentUser, selectedDate]);
+  }, [currentUser]);
 
   // Load My Tasks
   const loadMyTasks = useCallback(async () => {
@@ -136,92 +115,6 @@ export function CoachDashboardView() {
     refreshAll();
   }, [refreshAll]);
 
-  // Handle Quick Attendance Status Click
-  const handleToggleSwimmerStatus = (swimmerId: string, status: 'present' | 'absent') => {
-    setRollCallState(prev => ({
-      ...prev,
-      [swimmerId]: {
-        ...prev[swimmerId],
-        status,
-      },
-    }));
-  };
-
-  // Handle Level Change for Swimmer
-  const handleSwimmerLevelChange = (swimmerId: string, level: string) => {
-    setRollCallState(prev => ({
-      ...prev,
-      [swimmerId]: {
-        ...prev[swimmerId],
-        level,
-      },
-    }));
-  };
-
-  // Handle Note Change for Swimmer
-  const handleSwimmerNoteChange = (swimmerId: string, notes: string) => {
-    setRollCallState(prev => ({
-      ...prev,
-      [swimmerId]: {
-        ...prev[swimmerId],
-        notes,
-      },
-    }));
-  };
-
-  // Bulk Actions
-  const handleSetAllAttendance = (status: 'present' | 'absent') => {
-    setRollCallState(prev => {
-      const next = { ...prev };
-      assignedSwimmers.forEach(s => {
-        if (next[s.id]) {
-          next[s.id].status = status;
-        }
-      });
-      return next;
-    });
-  };
-
-  // Save Roll Call Notebook to Database
-  const handleSaveRollCall = async () => {
-    if (!currentUser) return;
-    setLoading(true);
-    setSaveSuccessMsg('');
-
-    try {
-      const records = assignedSwimmers.map(s => {
-        const state = rollCallState[s.id] || { status: 'present', level: s.level, notes: '' };
-        return {
-          swimmer_id: s.id,
-          date: selectedDate,
-          status: state.status,
-          level_at_time: state.level,
-          evaluation_notes: state.notes,
-        };
-      });
-
-      const res = await fetch('/api/swimmer-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          records,
-          recorded_by_user_id: currentUser.id,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setSaveSuccessMsg(`✅ تم حفظ وتأكيد كراسة الغياب ليوم (${selectedDate}) ومزامنتها فوراً مع إدارة HR!`);
-        setTimeout(() => setSaveSuccessMsg(''), 6000);
-        loadAssignedSwimmers();
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Handle Update Task Status
   const handleUpdateTaskStatus = async (taskId: string, status: 'pending' | 'in_progress' | 'completed') => {
     try {
@@ -243,10 +136,6 @@ export function CoachDashboardView() {
       console.error(e);
     }
   };
-
-  // Counts
-  const presentCount = assignedSwimmers.filter(s => rollCallState[s.id]?.status === 'present').length;
-  const absentCount = assignedSwimmers.filter(s => rollCallState[s.id]?.status === 'absent').length;
 
   const pendingTasksCount = myTasks.filter(t => t.status === 'pending').length;
   const inProgressTasksCount = myTasks.filter(t => t.status === 'in_progress').length;
@@ -275,15 +164,13 @@ export function CoachDashboardView() {
             <div>
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-400/20 text-teal-200 text-xs font-bold mb-1">
                 <Sparkles className="w-3.5 h-3.5 text-teal-300" />
-                <span>
-                  {currentUser?.role === 'coach' ? 'بوابة الكابتن والمدرب الميداني' : 'بوابة مساعد المدرب'}
-                </span>
+                <span>بوابة الكابتن وتحضير التدريبات</span>
               </div>
               <h1 className="text-xl sm:text-2xl font-black text-white">
                 أهلاً بك، {currentUser?.name}
               </h1>
               <p className="text-xs sm:text-sm text-teal-100/80 mt-0.5">
-                كراسة تحضير السباحين والتقييم الفني — مربوطة لحظياً بإدارة الأكاديمية
+                تصلك هنا تلقائياً ليلة كل تمرينة رسائل مستويات اللاعبين المسجلة لدى الـ HR لتحضير التدريبات دون الانشغال بكشف الغياب
               </p>
             </div>
           </div>
@@ -294,27 +181,27 @@ export function CoachDashboardView() {
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-white transition-all cursor-pointer self-start md:self-auto"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span>تحديث البيانات</span>
+            <span>تحديث رسائل المستويات</span>
           </button>
         </div>
 
         {/* Coach Overview Counters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-white/10">
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-teal-200 font-medium">السباحين بعهدتي</div>
-            <div className="text-xl font-black text-white mt-0.5">{assignedSwimmers.length} سباح</div>
+            <div className="text-[11px] text-teal-200 font-medium">مجموعات التدريب</div>
+            <div className="text-xl font-black text-white mt-0.5">{briefings.length} مجموعات</div>
+          </div>
+          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
+            <div className="text-[11px] text-sky-200 font-medium">إجمالي السباحين بالمجموعات</div>
+            <div className="text-xl font-black text-white mt-0.5">{assignedSwimmers.length} لاعب</div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
             <div className="text-[11px] text-amber-200 font-medium">مهام مكلف بها</div>
             <div className="text-xl font-black text-amber-300 mt-0.5">{pendingTasksCount + inProgressTasksCount} مهمة</div>
           </div>
           <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-emerald-200 font-medium">مهام أنجزتها</div>
-            <div className="text-xl font-black text-emerald-300 mt-0.5">{completedTasksCount} مهمة</div>
-          </div>
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">صافي مكافآتي</div>
-            <div className="text-xl font-black text-sky-300 mt-0.5 font-mono">+{totalBonuses} ج.م</div>
+            <div className="text-[11px] text-emerald-200 font-medium">صافي مكافآتي</div>
+            <div className="text-xl font-black text-emerald-300 mt-0.5 font-mono">+{totalBonuses} ج.م</div>
           </div>
         </div>
       </div>
@@ -329,8 +216,8 @@ export function CoachDashboardView() {
               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
           }`}
         >
-          <BookOpen className="w-4 h-4" />
-          <span>كراسة الغياب والتقييم الفني ({assignedSwimmers.length})</span>
+          <BellRing className="w-4 h-4" />
+          <span>📬 رسائل تحضير التدريبات ومستويات المجموعات ({briefings.length})</span>
         </button>
 
         <button
@@ -363,221 +250,126 @@ export function CoachDashboardView() {
         </button>
       </div>
 
-      {/* ==================== TAB 1: SWIMMER ROLL CALL (كراسة الغياب) ==================== */}
+      {/* ==================== TAB 1: AUTOMATIC PRE-WORKOUT GROUP LEVEL BRIEFINGS ==================== */}
       {activeTab === 'roll_call' && (
         <div className="space-y-6">
-          {/* Success Banner */}
-          {saveSuccessMsg && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center gap-2.5 animate-in fade-in">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span>{saveSuccessMsg}</span>
-            </div>
-          )}
-
-          {/* Roll Call Controls */}
-          <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-teal-600" />
-                <span className="text-xs font-bold text-slate-700">تاريخ الحصة والتمرين:</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={e => setSelectedDate(e.target.value)}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900 outline-none font-mono"
-                />
+          {/* Info Banner explaining the workflow */}
+          <div className="bg-teal-50/90 border border-teal-200 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                <BellRing className="w-5 h-5" />
               </div>
-
-              {/* Fast Attendance Batch Buttons */}
-              <div className="flex items-center gap-1.5 border-r border-slate-200 pr-3 mr-1">
-                <button
-                  onClick={() => handleSetAllAttendance('present')}
-                  className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                >
-                  ✓ تحضير الكل حاضر
-                </button>
-                <button
-                  onClick={() => handleSetAllAttendance('absent')}
-                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                >
-                  ✕ تحضير الكل غائب
-                </button>
+              <div>
+                <h2 className="font-bold text-teal-950 text-xs sm:text-sm">
+                  نظام رسائل تحضير التدريبات التلقائي (بدون انشغال المدرب بكراسة الغياب)
+                </h2>
+                <p className="text-xs text-teal-800 mt-1 leading-relaxed">
+                  يتولى مسؤول الـ HR (<strong>أ/ يوسف سمير مصطفى</strong>) تسجيل غياب اللاعبين وسؤالك عن مستوياتهم بعد كل تمرينة، وتصلك هنا تلقائياً <strong>ليلة التمرينة التالية</strong> (مثلاً: الإثنين بالليل لمجموعة السبت والثلاثاء) قائمة بمستويات كل لاعب في المجموعة لتحضير التدريبات.
+                </p>
               </div>
             </div>
 
-            {/* Attendance Tally */}
-            <div className="flex items-center gap-3 self-end sm:self-auto">
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl">
-                الحاضرين: {presentCount}
-              </span>
-              <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-xl">
-                الغائبين: {absentCount}
-              </span>
-            </div>
+            <select
+              value={selectedDaysFilter}
+              onChange={e => setSelectedDaysFilter(e.target.value)}
+              className="bg-white border border-teal-200 rounded-xl px-3 py-2 text-xs font-bold text-teal-900 outline-none shrink-0"
+            >
+              <option value="all">📅 جميع مجموعات التدريب</option>
+              {briefings.map(b => (
+                <option key={b.id} value={b.training_days}>
+                  مجموعة {b.training_days}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Swimmers List (The Roll Call Cards) */}
-          {assignedSwimmers.length === 0 ? (
+          {briefings.length === 0 ? (
             <div className="bg-white p-12 rounded-3xl border border-slate-200 text-center space-y-2">
               <BookOpen className="w-10 h-10 text-slate-300 mx-auto" />
-              <div className="text-sm font-bold text-slate-700">لا يوجد سباحين مسندين إليك حالياً</div>
-              <p className="text-xs text-slate-400">
-                يقوم مسؤول الـ HR بتسكين السباحين في مجموعتك التدريبية وستظهر أسماؤهم هنا تلقائياً
-              </p>
+              <div className="text-sm font-bold text-slate-700">لا توجد رسائل مجموعات مسجلة حالياً</div>
             </div>
           ) : (
-            <div className="space-y-3">
-              {assignedSwimmers.map(swimmer => {
-                const current = rollCallState[swimmer.id] || {
-                  status: 'present',
-                  level: swimmer.level,
-                  notes: '',
-                };
-                const isPresent = current.status === 'present';
-
-                return (
-                  <div
-                    key={swimmer.id}
-                    className={`p-4 sm:p-5 rounded-3xl border transition-all ${
-                      isPresent
-                        ? 'bg-white border-slate-200 hover:border-emerald-300 shadow-sm'
-                        : 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
-                    }`}
-                  >
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      {/* Swimmer Photo, Info, Subscription & Branch */}
-                      <div className="min-w-0 flex items-center gap-3.5">
-                        <img
-                          src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
-                          alt={swimmer.name}
-                          className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-xs shrink-0"
-                        />
-                        <div className="min-w-0 space-y-1">
+            <div className="space-y-6">
+              {briefings
+                .filter(b => selectedDaysFilter === 'all' || b.training_days === selectedDaysFilter)
+                .map(briefing => {
+                  const groupSwimmers = briefing.swimmers || [];
+                  return (
+                    <div
+                      key={briefing.id}
+                      className="bg-white border-2 border-teal-500/20 rounded-3xl overflow-hidden shadow-sm"
+                    >
+                      {/* Briefing Message Header */}
+                      <div className="bg-gradient-to-l from-slate-900 via-teal-950 to-slate-900 text-white p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-bold text-slate-900 text-sm sm:text-base">
-                              {swimmer.name}
+                            <span className="px-2.5 py-0.5 rounded-full bg-teal-400/20 text-teal-300 border border-teal-400/30 text-[11px] font-bold">
+                              📬 رسالة تحضير التمرينة القادمة
                             </span>
-                            <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">
-                              {swimmer.code}
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold">
+                              ⏰ {briefing.briefing_night_label}
                             </span>
-                            {swimmer.subscription_type && (
-                              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg">
-                                💳 {swimmer.subscription_type}
-                              </span>
-                            )}
-                            {swimmer.branch_name && (
-                              <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded-lg">
-                                📍 {swimmer.branch_name}
-                              </span>
-                            )}
                           </div>
-
-                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                            <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
+                          <h3 className="text-base sm:text-lg font-black text-white">
+                            مجموعة ({briefing.training_days}) — {briefing.next_session_label}
+                          </h3>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3.5 h-3.5 text-teal-400" />
+                              <span>{briefing.branch_name}</span>
+                            </span>
                             <span>•</span>
-                            <a href={`tel:${swimmer.parent_phone}`} className="font-mono text-sky-600 hover:underline font-bold dir-ltr">
-                              {swimmer.parent_phone}
-                            </a>
-                            {swimmer.health_notes && (
-                              <span className="bg-amber-50 text-amber-800 px-2 py-0.5 rounded-md font-semibold text-[10px]">
-                                ⚠️ {swimmer.health_notes}
-                              </span>
-                            )}
+                            <span>آخر تحديث للمستويات من الـ HR: <strong className="text-teal-300 font-mono">{briefing.source_session_date}</strong></span>
                           </div>
+                        </div>
+
+                        <div className="bg-white/10 border border-white/15 px-3.5 py-2 rounded-2xl text-center shrink-0">
+                          <div className="text-[10px] text-teal-200">عدد لاعبي المجموعة</div>
+                          <div className="text-base font-black text-white">{groupSwimmers.length} لاعب</div>
                         </div>
                       </div>
 
-                      {/* Fast Present / Absent Tap Buttons */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleSwimmerStatus(swimmer.id, 'present')}
-                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            isPresent
-                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-500'
-                              : 'bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
-                          }`}
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>حاضر بالتمرين</span>
-                        </button>
+                      {/* Swimmers Levels Table inside the Briefing Message */}
+                      <div className="p-4 sm:p-5 space-y-3">
+                        {groupSwimmers.map(item => (
+                          <div
+                            key={item.swimmer_id}
+                            className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                          >
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={item.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                                alt={item.swimmer_name}
+                                className="w-12 h-12 rounded-2xl object-cover border border-slate-200 shrink-0"
+                              />
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-900 text-xs sm:text-sm">
+                                    {item.swimmer_name}
+                                  </span>
+                                  <span className="font-mono text-[10px] bg-sky-50 text-sky-700 px-2 py-0.5 rounded-md font-bold">
+                                    {item.swimmer_code}
+                                  </span>
+                                </div>
+                                {item.evaluation_notes && (
+                                  <div className="text-xs text-slate-600 mt-1">
+                                    📝 ملاحظة التمرينة السابقة: <span className="font-semibold text-slate-800">{item.evaluation_notes}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleToggleSwimmerStatus(swimmer.id, 'absent')}
-                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            !isPresent
-                              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-500'
-                              : 'bg-slate-100 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
-                          }`}
-                        >
-                          <XCircle className="w-4 h-4" />
-                          <span>غائب اليوم</span>
-                        </button>
+                            <div className="flex items-center gap-2 self-start sm:self-center">
+                              <span className="px-3.5 py-1.5 rounded-xl bg-teal-600 text-white font-bold text-xs shadow-xs">
+                                🏊 المستوى الحالي: {item.level}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-
-                    {/* Post-Workout Level & Technical Notes Row */}
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-4 pt-3 border-t border-slate-100 text-xs">
-                      <div className="md:col-span-3">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          اختيار مستوى جاهز بعد التمرينة:
-                        </label>
-                        <select
-                          value={current.level}
-                          onChange={e => handleSwimmerLevelChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-slate-800"
-                        >
-                          <option value="المستوى 1: كسر حاجز الخوف والطفو">المستوى 1: كسر حاجز الخوف والطفو</option>
-                          <option value="المستوى 2: ضربات الرجلين والانسياب">المستوى 2: ضربات الرجلين والانسياب</option>
-                          <option value="المستوى 3: السباحة الحرة والتنفس الجانبي">المستوى 3: السباحة الحرة والتنفس الجانبي</option>
-                          <option value="المستوى 4: سباحة الظهر والفراشة">المستوى 4: سباحة الظهر والفراشة</option>
-                          <option value="المستوى 5: فريق السرعات والبطولات">المستوى 5: فريق السرعات والبطولات</option>
-                        </select>
-                      </div>
-
-                      <div className="md:col-span-4">
-                        <label className="block text-[11px] font-bold text-teal-800 mb-1">
-                          ✍️ أو اكتب مستوى اللاعب بعد تمرينة اليوم مباشرة:
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="اكتب المستوى الذي وصل له اللاعب بعد التمرينة..."
-                          value={current.level}
-                          onChange={e => handleSwimmerLevelChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-teal-50/50 border border-teal-200 rounded-xl outline-none text-slate-900 font-bold"
-                        />
-                      </div>
-
-                      <div className="md:col-span-5">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          ملاحظة وتقييم الكابتن في تمرينة اليوم:
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="مثال: أتقن ضربات الرجلين لمسافة 25 متر ويحتاج تحسين النفس الجانبي..."
-                          value={current.notes}
-                          onChange={e => handleSwimmerNoteChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-800 font-medium"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Master Save Button Floating / Sticky at Bottom */}
-              <div className="sticky bottom-4 z-20 pt-4">
-                <button
-                  type="button"
-                  onClick={handleSaveRollCall}
-                  disabled={loading}
-                  className="w-full py-4 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white font-black rounded-3xl text-sm sm:text-base shadow-2xl shadow-teal-600/40 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                >
-                  <Send className="w-5 h-5" />
-                  <span>حفظ كراسة الغياب والتقييم الفني وإرسالها فوراً لـ HR</span>
-                </button>
-              </div>
+                  );
+                })}
             </div>
           )}
         </div>

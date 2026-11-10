@@ -330,6 +330,7 @@ export interface Swimmer {
   assigned_coach_id: string;
   assigned_coach_name?: string;
   group_name?: string;
+  training_days?: string;
   health_notes?: string;
   status: 'active' | 'inactive';
   created_at: string;
@@ -348,5 +349,31 @@ export interface SwimmerLog {
   evaluation_notes?: string;
   recorded_by_user_id: string;
   recorded_by_name?: string;
+  created_at: string;
+}
+
+export interface CoachBriefingItem {
+  swimmer_id: string;
+  swimmer_name: string;
+  swimmer_code: string;
+  avatar?: string;
+  level: string;
+  last_status: 'present' | 'absent';
+  evaluation_notes?: string;
+  branch_name?: string;
+}
+
+export interface CoachBriefing {
+  id: string;
+  coach_id: string;
+  coach_name: string;
+  training_days: string;
+  branch_name: string;
+  source_session_date: string;
+  briefing_night_label: string;
+  next_session_label: string;
+  swimmers_json: string;
+  swimmers?: CoachBriefingItem[];
+  created_by_hr_name: string;
   created_at: string;
 }

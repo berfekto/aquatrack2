@@ -33,7 +33,8 @@ import {
   CreditCard,
   UserPlus,
   Save,
-  X
+  X,
+  XCircle
 } from 'lucide-react';
 import { Task, StaffLog, Swimmer, SwimmerLog, SubscriptionPlan } from '@/lib/types';
 import { Modal } from '@/components/ui/Modal';
@@ -49,6 +50,14 @@ const SWIMMER_LEVEL_PRESETS = [
   'المستوى 3: السباحة الحرة والتنفس الجانبي',
   'المستوى 4: سباحة الظهر والفراشة',
   'المستوى 5: فريق السرعات والبطولات',
+];
+
+const TRAINING_DAYS_PRESETS = [
+  'السبت والثلاثاء',
+  'الأحد والأربعاء',
+  'الإثنين والخميس',
+  'السبت والاثنين والأربعاء',
+  'الأحد والثلاثاء والخميس',
 ];
 
 function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
@@ -87,8 +96,20 @@ function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
 export function HRDashboardView() {
   const { currentUser, staffList, refreshStaffList, registerStaff } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'swimmers_oversight' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('swimmers_oversight');
+  const [activeTab, setActiveTab] = useState<'swimmers_oversight' | 'daily_roll_call' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('swimmers_oversight');
   const [loading, setLoading] = useState(false);
+
+  // --- Daily Roll Call & Technical Evaluation Notebook (with HR) ---
+  const [rollCallDate, setRollCallDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [rollCallBranchFilter, setRollCallBranchFilter] = useState<string>('all');
+  const [rollCallDaysFilter, setRollCallDaysFilter] = useState<string>('all');
+  const [rollCallState, setRollCallState] = useState<Record<string, {
+    status: 'present' | 'absent';
+    level: string;
+    notes: string;
+  }>>({});
+  const [rollCallSaving, setRollCallSaving] = useState(false);
+  const [rollCallSuccessMsg, setRollCallSuccessMsg] = useState('');
 
   // --- Subscription Plans State ---
   const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
@@ -159,6 +180,7 @@ export function HRDashboardView() {
     parent_phone: '',
     emergency_phone: '',
     group_name: '',
+    training_days: TRAINING_DAYS_PRESETS[0],
     health_notes: '',
   });
 
@@ -221,12 +243,105 @@ export function HRDashboardView() {
       const res = await fetch('/api/swimmers');
       if (res.ok) {
         const data = await res.json();
-        if (data.success) setSwimmers(data.swimmers);
+        if (data.success) {
+          const list: Swimmer[] = data.swimmers;
+          setSwimmers(list);
+
+          const logsRes = await fetch(`/api/swimmer-logs?date=${rollCallDate}`);
+          let existingLogs: SwimmerLog[] = [];
+          if (logsRes.ok) {
+            const logsData = await logsRes.json();
+            if (logsData.success) existingLogs = logsData.logs;
+          }
+          const existingMap = new Map(existingLogs.map(l => [l.swimmer_id, l]));
+          const initialMap: Record<string, { status: 'present' | 'absent'; level: string; notes: string }> = {};
+          list.forEach(s => {
+            const existing = existingMap.get(s.id);
+            initialMap[s.id] = {
+              status: existing ? existing.status : 'present',
+              level: existing?.level_at_time || s.level,
+              notes: existing?.evaluation_notes || '',
+            };
+          });
+          setRollCallState(initialMap);
+        }
       }
     } catch (e) {
       console.error(e);
     }
-  }, []);
+  }, [rollCallDate]);
+
+  const handleToggleRollCallStatus = (swimmerId: string, status: 'present' | 'absent') => {
+    setRollCallState(prev => ({
+      ...prev,
+      [swimmerId]: { ...(prev[swimmerId] || { level: '', notes: '' }), status },
+    }));
+  };
+
+  const handleRollCallLevelChange = (swimmerId: string, level: string) => {
+    setRollCallState(prev => ({
+      ...prev,
+      [swimmerId]: { ...(prev[swimmerId] || { status: 'present', notes: '' }), level },
+    }));
+  };
+
+  const handleRollCallNoteChange = (swimmerId: string, notes: string) => {
+    setRollCallState(prev => ({
+      ...prev,
+      [swimmerId]: { ...(prev[swimmerId] || { status: 'present', level: '' }), notes },
+    }));
+  };
+
+  const handleSetAllRollCallAttendance = (status: 'present' | 'absent') => {
+    setRollCallState(prev => {
+      const next = { ...prev };
+      swimmers.forEach(s => {
+        if (next[s.id]) next[s.id] = { ...next[s.id], status };
+      });
+      return next;
+    });
+  };
+
+  const handleSaveRollCallNotebook = async () => {
+    if (!currentUser) return;
+    setRollCallSaving(true);
+    setRollCallSuccessMsg('');
+    try {
+      const targetSwimmers = swimmers.filter(
+        s =>
+          (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) &&
+          (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter)
+      );
+      const records = targetSwimmers.map(s => {
+        const st = rollCallState[s.id] || { status: 'present', level: s.level, notes: '' };
+        return {
+          swimmer_id: s.id,
+          date: rollCallDate,
+          status: st.status,
+          level_at_time: st.level,
+          evaluation_notes: st.notes,
+        };
+      });
+      const res = await fetch('/api/swimmer-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          records,
+          recorded_by_user_id: currentUser.id,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRollCallSuccessMsg(`✅ تم حفظ غياب ومستويات التمرينة ليوم (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات التلقائية للمدرب ليلة التمرينة القادمة!`);
+        setTimeout(() => setRollCallSuccessMsg(''), 7000);
+        await loadSwimmers();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRollCallSaving(false);
+    }
+  };
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
@@ -262,6 +377,7 @@ export function HRDashboardView() {
       parent_phone: '',
       emergency_phone: '',
       group_name: '',
+      training_days: TRAINING_DAYS_PRESETS[0],
       health_notes: '',
     });
     setIsSwimmerModalOpen(true);
@@ -284,6 +400,7 @@ export function HRDashboardView() {
       parent_phone: swimmer.parent_phone || '',
       emergency_phone: swimmer.emergency_phone || '',
       group_name: swimmer.group_name || '',
+      training_days: swimmer.training_days || TRAINING_DAYS_PRESETS[0],
       health_notes: swimmer.health_notes || '',
     });
     setIsSwimmerModalOpen(true);
@@ -314,6 +431,7 @@ export function HRDashboardView() {
       parent_phone: swimmerForm.parent_phone.trim(),
       emergency_phone: swimmerForm.emergency_phone.trim(),
       group_name: swimmerForm.group_name.trim(),
+      training_days: swimmerForm.training_days,
       health_notes: swimmerForm.health_notes.trim(),
     };
 
@@ -685,7 +803,19 @@ export function HRDashboardView() {
           }`}
         >
           <BookOpen className="w-4 h-4" />
-          <span>اللاعبين بالصور والاشتراكات ومستوى كل تمرينة ({swimmers.length})</span>
+          <span>اللاعبين بالصور والاشتراكات ({swimmers.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('daily_roll_call')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
+            activeTab === 'daily_roll_call'
+              ? 'bg-teal-600 text-white shadow-md shadow-teal-600/30'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          <span>📖 كراسة الغياب والتقييم الفني ({swimmers.length})</span>
         </button>
 
         <button
@@ -902,6 +1032,242 @@ export function HRDashboardView() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== TAB 1.5: DAILY ROLL CALL & TECHNICAL EVALUATION NOTEBOOK (كراسة الغياب والتقييم الفني) ==================== */}
+      {activeTab === 'daily_roll_call' && (
+        <div className="space-y-6">
+          {/* Workflow Banner */}
+          <div className="bg-teal-50/90 border border-teal-200 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-teal-950 text-xs sm:text-sm">
+                📖 كراسة الغياب ومستويات التمرينة (خاصة بالـ HR فقط — لعدم تشتيت المدرب)
+              </h3>
+              <p className="text-xs text-teal-800 mt-1 leading-relaxed">
+                يقوم مسؤول الـ HR بتسجيل غياب اللاعبين وسؤال الكابتن عن مستوياتهم بعد التمرينة، وتقوم المنظومة <strong>تلقائياً ليلة التمرينة التالية</strong> (مثلاً: الإثنين بالليل لمجموعة السبت والثلاثاء) بإرسال رسالة للمدرب بمستويات كل لاعب في المجموعة لتحضير التدريبات.
+              </p>
+            </div>
+          </div>
+
+          {rollCallSuccessMsg && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{rollCallSuccessMsg}</span>
+            </div>
+          )}
+
+          {/* Roll Call Controls */}
+          <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-teal-600" />
+                <span className="text-xs font-bold text-slate-700">تاريخ الحصة والتمرين:</span>
+                <input
+                  type="date"
+                  value={rollCallDate}
+                  onChange={e => setRollCallDate(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900 outline-none font-mono"
+                />
+              </div>
+
+              <select
+                value={rollCallDaysFilter}
+                onChange={e => setRollCallDaysFilter(e.target.value)}
+                className="bg-teal-50 border border-teal-200 rounded-xl px-3 py-1.5 text-xs font-bold text-teal-900 outline-none"
+              >
+                <option value="all">📅 كل المجموعات (السبت والثلاثاء / الأحد والأربعاء...)</option>
+                {TRAINING_DAYS_PRESETS.map(d => (
+                  <option key={d} value={d}>مجموعة ({d})</option>
+                ))}
+              </select>
+
+              <select
+                value={rollCallBranchFilter}
+                onChange={e => setRollCallBranchFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
+              >
+                <option value="all">📍 جميع مواقع مطروح (فندق السلام & النادي الاجتماعي)</option>
+                {MATROUH_BRANCHES.map(b => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+
+              <div className="flex items-center gap-1.5 border-r border-slate-200 pr-3 mr-1">
+                <button
+                  type="button"
+                  onClick={() => handleSetAllRollCallAttendance('present')}
+                  className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  ✓ تحضير الكل حاضر
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetAllRollCallAttendance('absent')}
+                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  ✕ تحضير الكل غائب
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl">
+                الحاضرين: {swimmers.filter(s => (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) && (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter) && (rollCallState[s.id]?.status || 'present') === 'present').length}
+              </span>
+              <span className="text-xs font-bold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-xl">
+                الغائبين: {swimmers.filter(s => (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) && (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter) && rollCallState[s.id]?.status === 'absent').length}
+              </span>
+            </div>
+          </div>
+
+          {/* Swimmers Roll Call Cards */}
+          <div className="space-y-3">
+            {swimmers
+              .filter(
+                s =>
+                  (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) &&
+                  (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter)
+              )
+              .map(swimmer => {
+                const current = rollCallState[swimmer.id] || {
+                  status: 'present',
+                  level: swimmer.level,
+                  notes: '',
+                };
+                const isPresent = current.status === 'present';
+
+                return (
+                  <div
+                    key={swimmer.id}
+                    className={`p-4 sm:p-5 rounded-3xl border transition-all ${
+                      isPresent
+                        ? 'bg-white border-slate-200 hover:border-emerald-300 shadow-sm'
+                        : 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                    }`}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="min-w-0 flex items-center gap-3.5">
+                        <img
+                          src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                          alt={swimmer.name}
+                          className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-xs shrink-0"
+                        />
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-900 text-sm sm:text-base">{swimmer.name}</span>
+                            <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">{swimmer.code}</span>
+                            <span className="text-[11px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
+                              📅 مجموعة: {swimmer.training_days || TRAINING_DAYS_PRESETS[0]}
+                            </span>
+                            {swimmer.subscription_type && (
+                              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg">
+                                💳 {swimmer.subscription_type}
+                              </span>
+                            )}
+                            <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded-lg">
+                              📍 {swimmer.branch_name || MATROUH_BRANCHES[0]}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                            <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
+                            <span>•</span>
+                            <span className="font-mono text-sky-600 font-bold">{swimmer.parent_phone}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRollCallStatus(swimmer.id, 'present')}
+                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                            isPresent
+                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-500'
+                              : 'bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                          }`}
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>حاضر بالتمرين</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRollCallStatus(swimmer.id, 'absent')}
+                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                            !isPresent
+                              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-500'
+                              : 'bg-slate-100 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
+                          }`}
+                        >
+                          <XCircle className="w-4 h-4" />
+                          <span>غائب اليوم</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-4 pt-3 border-t border-slate-100 text-xs">
+                      <div className="md:col-span-3">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          اختيار مستوى جاهز بعد التمرينة:
+                        </label>
+                        <select
+                          value={current.level}
+                          onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
+                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-slate-800"
+                        >
+                          {SWIMMER_LEVEL_PRESETS.map(lvl => (
+                            <option key={lvl} value={lvl}>{lvl}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="md:col-span-4">
+                        <label className="block text-[11px] font-bold text-teal-800 mb-1">
+                          ✍️ أو اكتب مستوى اللاعب بعد تمرينة اليوم:
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="اكتب المستوى الذي وصل له اللاعب بعد التمرينة..."
+                          value={current.level}
+                          onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
+                          className="w-full p-2 bg-teal-50/50 border border-teal-200 rounded-xl outline-none text-slate-900 font-bold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-5">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          التقييم الفني وملاحظات التمرينة:
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="مثال: أتقن ضربات الرجلين لمسافة 25 متر ويحتاج تحسين النفس الجانبي..."
+                          value={current.notes}
+                          onChange={e => handleRollCallNoteChange(swimmer.id, e.target.value)}
+                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-800 font-medium"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+            <div className="sticky bottom-4 z-20 pt-3">
+              <button
+                type="button"
+                onClick={handleSaveRollCallNotebook}
+                disabled={rollCallSaving}
+                className="w-full py-4 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white font-black rounded-3xl text-sm sm:text-base shadow-2xl shadow-teal-600/40 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <CheckCircle2 className="w-5 h-5" />
+                <span>
+                  {rollCallSaving
+                    ? 'جاري حفظ الكراسة...'
+                    : `حفظ وتأكيد كراسة الغياب والتقييم الفني ليوم (${rollCallDate})`}
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -1535,15 +1901,31 @@ export function HRDashboardView() {
             </div>
           </div>
 
-          <div>
-            <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو مواعيد المجموعة</label>
-            <input
-              type="text"
-              value={swimmerForm.health_notes}
-              onChange={e => setSwimmerForm({ ...swimmerForm, health_notes: e.target.value })}
-              placeholder="أي ملاحظات صحية أو تفاصيل إضافية..."
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                📅 مواعيد تمرين المجموعة (لإرسال مستوياتهم للمدرب ليلة التمرين) *
+              </label>
+              <select
+                value={swimmerForm.training_days}
+                onChange={e => setSwimmerForm({ ...swimmerForm, training_days: e.target.value })}
+                className="w-full p-2.5 bg-teal-50/70 border border-teal-200 rounded-xl outline-none font-bold text-teal-950"
+              >
+                {TRAINING_DAYS_PRESETS.map(d => (
+                  <option key={d} value={d}>مجموعة ({d})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو إضافية</label>
+              <input
+                type="text"
+                value={swimmerForm.health_notes}
+                onChange={e => setSwimmerForm({ ...swimmerForm, health_notes: e.target.value })}
+                placeholder="أي ملاحظات صحية أو تفاصيل إضافية..."
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+              />
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">

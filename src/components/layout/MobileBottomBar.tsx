@@ -26,7 +26,7 @@ export function MobileBottomBar() {
     ...(isCoachOrAsst ? [
       {
         id: 'coach_dashboard',
-        label: 'كراسة الغياب',
+        label: 'تحضير التمرين',
         icon: BookOpen,
       },
       {
@@ -37,7 +37,7 @@ export function MobileBottomBar() {
     ] : [
       {
         id: 'hr_dashboard',
-        label: 'لوحة HR',
+        label: 'HR وكراسة الغياب',
         icon: CheckSquare,
       },
       {

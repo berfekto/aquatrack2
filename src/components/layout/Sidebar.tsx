@@ -43,23 +43,23 @@ export function Sidebar() {
   const navItems = [
     {
       id: 'hr_dashboard',
-      label: 'إدارة HR والمهام الموحدة',
+      label: 'إدارة HR وكراسة الغياب والتقييم',
       icon: CheckSquare,
       roles: ['super_admin', 'academy_manager', 'hr', 'admin'],
-      badge: 'المركزية',
+      badge: 'HR المركزية',
     },
     {
       id: 'coach_dashboard',
-      label: 'كراسة الغياب والتقييم الفني',
+      label: 'تحضير التدريبات ومستويات المجموعات',
       icon: BookOpen,
       roles: ['super_admin', 'coach', 'assistant'],
-      badge: 'المدرب',
+      badge: 'للمدرب',
     },
     {
       id: 'dashboard',
       label: 'لوحة القيادة العامة',
       icon: LayoutDashboard,
-      roles: ['super_admin', 'academy_manager', 'accountant'],
+      roles: ['super_admin', 'academy_manager', 'hr', 'accountant'],
     },
     {
       id: 'schedule',
@@ -78,13 +78,13 @@ export function Sidebar() {
       id: 'students',
       label: 'الطلاب والسباحين',
       icon: GraduationCap,
-      roles: ['super_admin', 'academy_manager', 'coach', 'assistant'],
+      roles: ['super_admin', 'academy_manager', 'hr', 'coach', 'assistant'],
     },
     {
       id: 'groups',
       label: 'المجموعات والتدريبات',
       icon: Sparkles,
-      roles: ['super_admin', 'academy_manager', 'coach', 'assistant'],
+      roles: ['super_admin', 'academy_manager', 'hr', 'coach', 'assistant'],
     },
     {
       id: 'staff',
@@ -96,13 +96,13 @@ export function Sidebar() {
       id: 'academies',
       label: 'الأكاديميات والمسابح',
       icon: Waves,
-      roles: ['super_admin', 'academy_manager'],
+      roles: ['super_admin', 'academy_manager', 'hr'],
     },
     {
       id: 'accounting',
       label: 'الاشتراكات والحسابات',
       icon: Receipt,
-      roles: ['super_admin', 'academy_manager', 'accountant'],
+      roles: ['super_admin', 'academy_manager', 'hr', 'accountant'],
     },
     {
       id: 'payroll',

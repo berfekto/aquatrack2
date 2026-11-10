@@ -361,6 +361,20 @@ export function initDatabase() {
       description TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS coach_briefings (
+      id TEXT PRIMARY KEY,
+      coach_id TEXT NOT NULL,
+      coach_name TEXT NOT NULL,
+      training_days TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      source_session_date TEXT NOT NULL,
+      briefing_night_label TEXT NOT NULL,
+      next_session_label TEXT NOT NULL,
+      swimmers_json TEXT NOT NULL,
+      created_by_hr_name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // Ensure columns exist if tables were already created
@@ -378,6 +392,7 @@ export function initDatabase() {
   try { db.exec("ALTER TABLE swimmers ADD COLUMN subscription_type TEXT DEFAULT 'اشتراك شهري تأسيسي (8 حصص)';"); } catch (e) {}
   try { db.exec("ALTER TABLE swimmers ADD COLUMN branch_name TEXT DEFAULT 'فندق السلام للقوات المسلحة - مطروح';"); } catch (e) {}
   try { db.exec("ALTER TABLE swimmers ADD COLUMN avatar TEXT;"); } catch (e) {}
+  try { db.exec("ALTER TABLE swimmers ADD COLUMN training_days TEXT DEFAULT 'السبت والثلاثاء';"); } catch (e) {}
 
   // Seed default subscription plans if empty
   const plansCount = (db.prepare('SELECT COUNT(*) as count FROM subscription_plans').get() as { count: number }).count;
@@ -753,6 +768,78 @@ function migrateToMatrouhProduction() {
     db.prepare("UPDATE swimmers SET avatar = 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?w=150' WHERE id = 'swim-6' AND (avatar IS NULL OR avatar = '')").run();
     db.prepare("UPDATE swimmers SET avatar = 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150' WHERE id = 'swim-7' AND (avatar IS NULL OR avatar = '')").run();
     db.prepare("UPDATE swimmers SET avatar = 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150' WHERE id = 'swim-8' AND (avatar IS NULL OR avatar = '')").run();
+
+    db.prepare(`
+      UPDATE swimmers
+      SET training_days = CASE
+        WHEN id IN ('swim-4', 'swim-5', 'swim-7', 'swim-8') THEN 'الأحد والأربعاء'
+        ELSE 'السبت والثلاثاء'
+      END
+      WHERE training_days IS NULL OR training_days = ''
+    `).run();
+
+    // Seed initial automatic night-before coach briefing if empty
+    const briefingsCount = (db.prepare('SELECT COUNT(*) as count FROM coach_briefings').get() as { count: number }).count;
+    if (briefingsCount === 0) {
+      const satTueSwimmers = db.prepare("SELECT * FROM swimmers WHERE training_days = 'السبت والثلاثاء'").all() as any[];
+      const sunWedSwimmers = db.prepare("SELECT * FROM swimmers WHERE training_days = 'الأحد والأربعاء'").all() as any[];
+      const insertBriefing = db.prepare(`
+        INSERT INTO coach_briefings (id, coach_id, coach_name, training_days, branch_name, source_session_date, briefing_night_label, next_session_label, swimmers_json, created_by_hr_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      if (satTueSwimmers.length > 0) {
+        insertBriefing.run(
+          'brief-sat-tue',
+          'user-coach-1',
+          'كابتن أسامة هيثم مصطفى',
+          'السبت والثلاثاء',
+          'فندق السلام للقوات المسلحة - مطروح',
+          'السبت الماضي',
+          'تُرسل تلقائياً الإثنين مساءً (ليلة تمرينة الثلاثاء) والجمعة مساءً (ليلة تمرينة السبت)',
+          'تمرينة الثلاثاء (مجموعة السبت والثلاثاء)',
+          JSON.stringify(
+            satTueSwimmers.map(s => ({
+              swimmer_id: s.id,
+              swimmer_name: s.name,
+              swimmer_code: s.code,
+              avatar: s.avatar,
+              level: s.level,
+              last_status: 'present',
+              evaluation_notes: 'تم أخذ المستوى من المدرب في تمرينة السبت لتحضير تمرينة الثلاثاء',
+              branch_name: s.branch_name,
+            }))
+          ),
+          'يوسف سمير مصطفى (HR)',
+          new Date().toISOString()
+        );
+      }
+      if (sunWedSwimmers.length > 0) {
+        insertBriefing.run(
+          'brief-sun-wed',
+          'user-coach-1',
+          'كابتن أسامة هيثم مصطفى',
+          'الأحد والأربعاء',
+          'النادي الاجتماعي - مرسى مطروح',
+          'الأحد الماضي',
+          'تُرسل تلقائياً الثلاثاء مساءً (ليلة تمرينة الأربعاء) والسبت مساءً (ليلة تمرينة الأحد)',
+          'تمرينة الأربعاء (مجموعة الأحد والأربعاء)',
+          JSON.stringify(
+            sunWedSwimmers.map(s => ({
+              swimmer_id: s.id,
+              swimmer_name: s.name,
+              swimmer_code: s.code,
+              avatar: s.avatar,
+              level: s.level,
+              last_status: 'present',
+              evaluation_notes: 'تم أخذ المستوى من المدرب في تمرينة الأحد لتحضير تمرينة الأربعاء',
+              branch_name: s.branch_name,
+            }))
+          ),
+          'يوسف سمير مصطفى (HR)',
+          new Date().toISOString()
+        );
+      }
+    }
   } catch (err) {
     console.error('Migration error:', err);
   }

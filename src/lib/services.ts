@@ -21,7 +21,9 @@ import {
   StaffLog,
   Swimmer,
   SwimmerLog,
-  SubscriptionPlan
+  SubscriptionPlan,
+  CoachBriefing,
+  CoachBriefingItem
 } from './types';
 import { verifyPassword, hashPassword, needsRehash } from './auth';
 
@@ -1772,8 +1774,8 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
     INSERT INTO swimmers (
       id, name, code, birth_date, gender, parent_name, parent_phone, emergency_phone,
       level, subscription_type, branch_name, avatar,
-      assigned_coach_id, assigned_coach_name, group_name, health_notes, status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      assigned_coach_id, assigned_coach_name, group_name, training_days, health_notes, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -1790,11 +1792,13 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
     data.assigned_coach_id,
     coach?.name || 'كابتن أسامة هيثم مصطفى',
     data.group_name || '',
+    data.training_days || 'السبت والثلاثاء',
     data.health_notes || '',
     data.status || 'active',
     now
   );
 
+  syncCoachBriefingsForGroups();
   return getSwimmerById(id)!;
 }
 
@@ -1821,6 +1825,7 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
       parent_name = COALESCE(?, parent_name),
       emergency_phone = COALESCE(?, emergency_phone),
       group_name = COALESCE(?, group_name),
+      training_days = COALESCE(?, training_days),
       health_notes = COALESCE(?, health_notes),
       status = COALESCE(?, status)
     WHERE id = ?
@@ -1836,11 +1841,13 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
     data.parent_name !== undefined ? data.parent_name : null,
     data.emergency_phone !== undefined ? data.emergency_phone : null,
     data.group_name !== undefined ? data.group_name : null,
+    data.training_days !== undefined ? data.training_days : null,
     data.health_notes !== undefined ? data.health_notes : null,
     data.status !== undefined ? data.status : null,
     id
   );
 
+  syncCoachBriefingsForGroups();
   return getSwimmerById(id)!;
 }
 
@@ -1987,7 +1994,145 @@ export function recordSwimmerRollCall(
   });
 
   runTransaction();
+  syncCoachBriefingsForGroups(records[0]?.date, recorder?.name || 'يوسف سمير مصطفى (HR)', true);
   return insertedLogs;
+}
+
+function getScheduleBriefingMeta(trainingDays: string): { briefingNightLabel: string; nextSessionLabel: string } {
+  if (trainingDays.includes('السبت') && trainingDays.includes('الثلاثاء')) {
+    return {
+      briefingNightLabel: 'تُرسل تلقائياً الإثنين بالليل (لتمرينة الثلاثاء) والجمعة بالليل (لتمرينة السبت)',
+      nextSessionLabel: 'تحضير تمرينة الثلاثاء / السبت القادمة (مجموعة السبت والثلاثاء)',
+    };
+  }
+  if (trainingDays.includes('الأحد') && trainingDays.includes('الأربعاء')) {
+    return {
+      briefingNightLabel: 'تُرسل تلقائياً الثلاثاء بالليل (لتمرينة الأربعاء) والسبت بالليل (لتمرينة الأحد)',
+      nextSessionLabel: 'تحضير تمرينة الأربعاء / الأحد القادمة (مجموعة الأحد والأربعاء)',
+    };
+  }
+  if (trainingDays.includes('الإثنين') && trainingDays.includes('الخميس')) {
+    return {
+      briefingNightLabel: 'تُرسل تلقائياً الأربعاء بالليل (لتمرينة الخميس) والأحد بالليل (لتمرينة الإثنين)',
+      nextSessionLabel: 'تحضير تمرينة الخميس / الإثنين القادمة (مجموعة الإثنين والخميس)',
+    };
+  }
+  return {
+    briefingNightLabel: `تُرسل تلقائياً ليلة التمرين للمدرب (${trainingDays})`,
+    nextSessionLabel: `تحضير التمرينة القادمة (مجموعة ${trainingDays})`,
+  };
+}
+
+export function syncCoachBriefingsForGroups(
+  sourceDate?: string,
+  hrName = 'يوسف سمير مصطفى (HR)',
+  sendNotification = false
+): CoachBriefing[] {
+  const allSwimmers = db.prepare("SELECT * FROM swimmers WHERE status = 'active' ORDER BY name ASC").all() as Swimmer[];
+  const grouped = new Map<string, Swimmer[]>();
+
+  for (const s of allSwimmers) {
+    const days = s.training_days || 'السبت والثلاثاء';
+    const key = `${s.assigned_coach_id || 'user-coach-1'}||${days}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(s);
+  }
+
+  const now = new Date().toISOString();
+  const upsertBriefing = db.prepare(`
+    INSERT INTO coach_briefings (
+      id, coach_id, coach_name, training_days, branch_name,
+      source_session_date, briefing_night_label, next_session_label,
+      swimmers_json, created_by_hr_name, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      coach_name = excluded.coach_name,
+      branch_name = excluded.branch_name,
+      source_session_date = excluded.source_session_date,
+      briefing_night_label = excluded.briefing_night_label,
+      next_session_label = excluded.next_session_label,
+      swimmers_json = excluded.swimmers_json,
+      created_by_hr_name = excluded.created_by_hr_name,
+      created_at = excluded.created_at
+  `);
+
+  for (const [key, list] of grouped.entries()) {
+    const [coachId, trainingDays] = key.split('||');
+    const coach = getUserById(coachId);
+    const coachName = coach?.name || 'كابتن أسامة هيثم مصطفى';
+    const branchName = list[0]?.branch_name || 'فندق السلام للقوات المسلحة - مطروح';
+    const meta = getScheduleBriefingMeta(trainingDays);
+
+    const items: CoachBriefingItem[] = list.map(s => {
+      const latestLog = db.prepare(`
+        SELECT status, level_at_time, evaluation_notes, date
+        FROM swimmer_logs
+        WHERE swimmer_id = ?
+        ORDER BY date DESC, created_at DESC
+        LIMIT 1
+      `).get(s.id) as { status: 'present' | 'absent'; level_at_time?: string; evaluation_notes?: string; date?: string } | undefined;
+
+      return {
+        swimmer_id: s.id,
+        swimmer_name: s.name,
+        swimmer_code: s.code,
+        avatar: s.avatar,
+        level: latestLog?.level_at_time || s.level,
+        last_status: latestLog?.status || 'present',
+        evaluation_notes: latestLog?.evaluation_notes || '',
+        branch_name: s.branch_name,
+      };
+    });
+
+    const id = `brief-${coachId}-${Buffer.from(trainingDays).toString('hex').slice(0, 12)}`;
+    upsertBriefing.run(
+      id,
+      coachId,
+      coachName,
+      trainingDays,
+      branchName,
+      sourceDate || new Date().toISOString().split('T')[0],
+      meta.briefingNightLabel,
+      meta.nextSessionLabel,
+      JSON.stringify(items),
+      hrName,
+      now
+    );
+
+    if (sendNotification) {
+      const summaryLines = items.map(i => `• ${i.swimmer_name}: ${i.level}`).join(' | ');
+      createNotification({
+        target_role: 'coach',
+        target_user_id: coachId,
+        title: `📬 رسالة تحضير تمرينة (${trainingDays}) — مستويات اللاعبين`,
+        message: `تم تحديث مستويات لاعبي مجموعة (${trainingDays}) بواسطة الـ HR لتحضير التدريبات القادمة: ${summaryLines}`,
+        type: 'schedule',
+        link: 'coach_dashboard',
+      });
+    }
+  }
+
+  return getCoachBriefings();
+}
+
+export function getCoachBriefings(coachId?: string): CoachBriefing[] {
+  let rows = db.prepare('SELECT * FROM coach_briefings ORDER BY created_at DESC').all() as CoachBriefing[];
+  if (rows.length === 0) {
+    rows = syncCoachBriefingsForGroups();
+  }
+  if (coachId && coachId !== 'all') {
+    rows = rows.filter(r => r.coach_id === coachId);
+  }
+  return rows.map(r => {
+    let parsed: CoachBriefingItem[] = [];
+    try {
+      parsed = JSON.parse(r.swimmers_json);
+    } catch {}
+    return {
+      ...r,
+      swimmers: parsed,
+    };
+  });
 }
 
 // --- STAFF USERS & STATS ---
