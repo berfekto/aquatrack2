@@ -79,23 +79,20 @@ function MainContent() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex overflow-x-hidden" dir="rtl">
-      {/* Sidebar for Desktop & Mobile Drawer */}
+      {/* 3-Lines Visual Grid Menu Drawer (Works on both Mobile & Desktop) */}
       <Sidebar />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 lg:mr-72 transition-all w-full overflow-x-hidden">
-        {/* Top Header */}
+      <div className="flex-1 flex flex-col min-w-0 transition-all w-full overflow-x-hidden">
+        {/* Clean Minimal Top Header (3-Lines Menu + Title + Avatar) */}
         <Header onOpenQuickModal={handleOpenQuickModal} />
 
-        {/* Dynamic Page Content with responsive mobile padding & Error Protection */}
-        <main className="flex-1 p-2.5 sm:p-5 lg:p-8 pb-28 sm:pb-24 lg:pb-10 max-w-7xl w-full mx-auto animate-in fade-in duration-150">
+        {/* Dynamic Page Content */}
+        <main className="flex-1 p-3 sm:p-5 lg:p-8 pb-24 max-w-5xl w-full mx-auto animate-in fade-in duration-150">
           <ErrorBoundary>
             {renderActiveView()}
           </ErrorBoundary>
         </main>
-
-        {/* Mobile Native Bottom Bar (Touchscreens) */}
-        <MobileBottomBar />
       </div>
     </div>
   );

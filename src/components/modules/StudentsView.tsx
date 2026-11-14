@@ -28,8 +28,25 @@ import {
   CheckSquare,
   Square,
   FileText,
-  Sparkles
+  Sparkles,
+  MessageCircle
 } from 'lucide-react';
+
+function formatWhatsAppUrl(phone: string, studentName?: string): string {
+  const digits = (phone || '').replace(/\D/g, '');
+  let intl = digits;
+  if (digits.startsWith('0020')) {
+    intl = digits.slice(2);
+  } else if (digits.startsWith('01')) {
+    intl = '20' + digits.slice(1);
+  } else if (!digits.startsWith('20') && digits.length === 10) {
+    intl = '20' + digits;
+  }
+  const text = studentName
+    ? encodeURIComponent(`مرحباً ولي أمر اللاعب ${studentName}، معكم إدارة أكاديمية السباحة بمطروح`)
+    : '';
+  return `https://wa.me/${intl}${text ? `?text=${text}` : ''}`;
+}
 
 export function StudentsView() {
   const { currentAcademyId, currentRole, coachId, academies, currentUser } = useApp();
@@ -512,8 +529,17 @@ export function StudentsView() {
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">هاتف الطوارئ:</span>
-                    <span className="font-mono text-slate-800 font-semibold">{student.parent_phone}</span>
+                    <span className="text-slate-400">واتساب ولي الأمر:</span>
+                    <a
+                      href={formatWhatsAppUrl(student.parent_phone, student.name)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-mono text-[11px] font-bold transition-all"
+                      title="اضغط لفتح واتساب ولي الأمر"
+                    >
+                      <MessageCircle className="w-3 h-3" />
+                      <span>{student.parent_phone}</span>
+                    </a>
                   </div>
 
                   {student.health_notes && (

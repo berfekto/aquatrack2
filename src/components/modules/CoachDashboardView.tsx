@@ -31,6 +31,19 @@ export function CoachDashboardView() {
   const [activeTab, setActiveTab] = useState<'roll_call' | 'my_tasks' | 'my_record'>('roll_call');
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail === 'roll_call' || detail === 'my_tasks' || detail === 'my_record') {
+        setActiveTab(detail);
+      } else if (detail === 'home_grid') {
+        setActiveTab('roll_call');
+      }
+    };
+    window.addEventListener('aquatrack:navigate-section', handler);
+    return () => window.removeEventListener('aquatrack:navigate-section', handler);
+  }, []);
+
   // --- 1. Pre-Workout Group Level Briefings (Sent automatically night before training) ---
   const [assignedSwimmers, setAssignedSwimmers] = useState<Swimmer[]>([]);
   const [briefings, setBriefings] = useState<CoachBriefing[]>([]);

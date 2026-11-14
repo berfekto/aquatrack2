@@ -34,10 +34,34 @@ import {
   UserPlus,
   Save,
   X,
-  XCircle
+  XCircle,
+  MessageCircle,
+  Waves,
+  GraduationCap,
+  BellRing,
+  LayoutGrid,
+  ArrowRight,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { Task, StaffLog, Swimmer, SwimmerLog, SubscriptionPlan } from '@/lib/types';
 import { Modal } from '@/components/ui/Modal';
+
+function formatWhatsAppUrl(phone: string, swimmerName?: string): string {
+  const digits = (phone || '').replace(/\D/g, '');
+  let intl = digits;
+  if (digits.startsWith('0020')) {
+    intl = digits.slice(2);
+  } else if (digits.startsWith('01')) {
+    intl = '20' + digits.slice(1);
+  } else if (!digits.startsWith('20') && digits.length === 10) {
+    intl = '20' + digits;
+  }
+  const text = swimmerName
+    ? encodeURIComponent(`مرحباً ولي أمر اللاعب ${swimmerName}، معكم إدارة أكاديمية السباحة بمطروح`)
+    : '';
+  return `https://wa.me/${intl}${text ? `?text=${text}` : ''}`;
+}
 
 const MATROUH_BRANCHES = [
   'فندق السلام للقوات المسلحة - مطروح',
@@ -94,10 +118,22 @@ function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
 }
 
 export function HRDashboardView() {
-  const { currentUser, staffList, refreshStaffList, registerStaff } = useApp();
+  const { currentUser, staffList, refreshStaffList, registerStaff, setActiveTab: setGlobalTab, setMobileMenuOpen } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'swimmers_oversight' | 'daily_roll_call' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('swimmers_oversight');
+  const [activeTab, setActiveTab] = useState<'home_grid' | 'swimmers_oversight' | 'daily_roll_call' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('home_grid');
+  const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        setActiveTab(detail);
+      }
+    };
+    window.addEventListener('aquatrack:navigate-section', handler);
+    return () => window.removeEventListener('aquatrack:navigate-section', handler);
+  }, []);
 
   // --- Daily Roll Call & Technical Evaluation Notebook (with HR) ---
   const [rollCallDate, setRollCallDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -718,142 +754,270 @@ export function HRDashboardView() {
   const coachesCount = staffList.filter(s => s.role === 'coach').length;
   const assistantsCount = staffList.filter(s => s.role === 'assistant').length;
 
+  const salamCount = swimmers.filter(s => (s.branch_name || MATROUH_BRANCHES[0]).includes('السلام')).length;
+  const socialCount = swimmers.filter(s => (s.branch_name || '').includes('الاجتماعي')).length;
+
   return (
-    <div className="space-y-6" dir="rtl">
-      {/* Top Banner / Master Header */}
-      <div className="bg-gradient-to-r from-sky-900 via-indigo-900 to-slate-900 rounded-3xl p-5 sm:p-7 text-white shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-80 h-80 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-2 mb-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-400/20 text-sky-200 text-xs font-bold">
-                <MapPin className="w-3.5 h-3.5 text-sky-400" />
-                <span>فندق السلام للقوات المسلحة & النادي الاجتماعي - مرسى مطروح</span>
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-400/20 text-emerald-200 text-[11px] font-bold">
-                <Sparkles className="w-3 h-3 text-emerald-300" />
-                <span>إدارة الشركاء: مصطفى محمد فتحي • يوسف سمير مصطفى • كابتن أسامة هيثم مصطفى</span>
-              </span>
+    <div className="space-y-5" dir="rtl">
+      {/* ==================== SIMPLE VISUAL GRID HOME (واجهة الأيقونات المقسمة البسيطة) ==================== */}
+      {activeTab === 'home_grid' && (
+        <div
+          className={`max-w-xl mx-auto rounded-[38px] p-5 sm:p-7 shadow-2xl border transition-all duration-200 ${
+            isDarkTheme
+              ? 'bg-[#1e1f35] border-white/10 text-white'
+              : 'bg-white border-slate-200 text-slate-900'
+          }`}
+        >
+          {/* Minimal Top Header inside Launcher (Like the uploaded reference UI) */}
+          <div className="flex items-center justify-between mb-6">
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className={`p-2.5 rounded-2xl transition-colors cursor-pointer ${
+                isDarkTheme ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+              }`}
+              title="فتح القائمة (التلت شرط)"
+            >
+              <LayoutGrid className="w-5 h-5" />
+            </button>
+
+            <div className="text-center">
+              <h1 className="text-base sm:text-lg font-black tracking-tight">أكاديمية مطروح للسباحة</h1>
+              <p className={`text-[11px] ${isDarkTheme ? 'text-slate-400' : 'text-slate-500'}`}>
+                أهلاً بك، {currentUser?.name}
+              </p>
             </div>
-            <h1 className="text-xl sm:text-2xl font-black text-white">
-              منظومة إدارة السباحين، الاشتراكات، والموارد البشرية (مطروح)
-            </h1>
-            <p className="text-xs sm:text-sm text-sky-200/80 mt-1">
-              تسجيل بيانات وصور اللاعبين، أنواع الاشتراكات، ومتابعة مستوى كل لاعب بعد كل تمرينة
-            </p>
+
+            <button
+              onClick={() => setIsDarkTheme(!isDarkTheme)}
+              className={`p-2.5 rounded-2xl transition-colors cursor-pointer ${
+                isDarkTheme ? 'bg-white/10 text-amber-300' : 'bg-slate-100 text-slate-700'
+              }`}
+              title="تبديل المظهر الفاتح / الداكن"
+            >
+              {isDarkTheme ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          {/* 2 Colorful Top Branch Cards (Like "Bedroom" & "Dinning Room" in reference image) */}
+          <div className="grid grid-cols-2 gap-3.5 mb-7">
             <button
-              onClick={() => setIsHireAssistantModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-xs font-bold text-emerald-200 transition-all cursor-pointer"
-              title="إضافة مساعد مدرب جديد عند فتح باب العمل"
+              onClick={() => {
+                setSwimmerBranchFilter(MATROUH_BRANCHES[0]);
+                setActiveTab('swimmers_oversight');
+              }}
+              className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-rose-500 to-pink-500 text-white text-right shadow-lg shadow-rose-500/30 hover:scale-[1.02] transition-all cursor-pointer"
             >
-              <UserPlus className="w-4 h-4 text-emerald-300" />
-              <span>+ إضافة مساعد مدرب (عند فتح التعيين)</span>
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mb-3">
+                <Waves className="w-5 h-5 text-white" />
+              </div>
+              <div className="font-black text-sm sm:text-base truncate">فندق السلام</div>
+              <div className="text-[11px] text-rose-100 mt-0.5">القوات المسلحة - مطروح</div>
+              <div className="mt-3 pt-2 border-t border-white/20 flex items-center justify-between text-[11px] font-bold">
+                <span>⚡ {salamCount} لاعب</span>
+                <span>عرض ←</span>
+              </div>
             </button>
+
             <button
-              onClick={refreshAll}
-              disabled={loading}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-white transition-all cursor-pointer"
+              onClick={() => {
+                setSwimmerBranchFilter(MATROUH_BRANCHES[1]);
+                setActiveTab('swimmers_oversight');
+              }}
+              className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-amber-400 to-orange-500 text-white text-right shadow-lg shadow-amber-500/30 hover:scale-[1.02] transition-all cursor-pointer"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              <span>تحديث البيانات</span>
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mb-3">
+                <Waves className="w-5 h-5 text-white" />
+              </div>
+              <div className="font-black text-sm sm:text-base truncate">النادي الاجتماعي</div>
+              <div className="text-[11px] text-amber-100 mt-0.5">مرسى مطروح</div>
+              <div className="mt-3 pt-2 border-t border-white/20 flex items-center justify-between text-[11px] font-bold">
+                <span>⚡ {socialCount} لاعب</span>
+                <span>عرض ←</span>
+              </div>
+            </button>
+          </div>
+
+          {/* Section Title */}
+          <div className="text-xs sm:text-sm font-extrabold mb-3.5 px-1">
+            الأقسام المقسمة (اضغط على أي قسم لفتحه)
+          </div>
+
+          {/* 3x2 Grid of Rounded Square Icon Tiles (Like the 6 appliances/folders in reference images) */}
+          <div className="grid grid-cols-3 gap-3.5">
+            <button
+              onClick={() => {
+                setSwimmerBranchFilter('all');
+                setActiveTab('swimmers_oversight');
+              }}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/30">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">اللاعبين</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">{swimmers.length} لاعب • واتساب</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('daily_roll_call')}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-purple-600 text-white flex items-center justify-center shadow-md shadow-purple-600/30">
+                <BookOpen className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">كراسة الغياب</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">والمستوى الفني</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('subscription_settings')}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-teal-500 text-white flex items-center justify-center shadow-md shadow-teal-500/30">
+                <CreditCard className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">الاشتراكات</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">{subscriptionPlans.length} باقات</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('tasks')}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-600/30">
+                <CheckSquare className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">الكادر والمهام</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">{tasks.length} مهام</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('attendance_penalties')}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/30">
+                <Award className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">حضور ومكافآت</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">سجل الفريق</div>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setGlobalTab('coach_dashboard')}
+              className={`p-4 rounded-3xl flex flex-col items-center text-center justify-center gap-2.5 transition-all hover:scale-105 cursor-pointer border ${
+                isDarkTheme
+                  ? 'bg-[#2a2c47] border-white/5 hover:border-white/20 shadow-md'
+                  : 'bg-slate-50 border-slate-200/80 hover:border-sky-300 shadow-xs'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/30">
+                <BellRing className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="font-bold text-xs sm:text-sm">رسائل المدرب</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">ليلة التمرين</div>
+              </div>
+            </button>
+          </div>
+
+          {/* Bottom Coral Pill Button (Like "Add new appliance" at bottom of reference image) */}
+          <div className="mt-7 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={handleOpenAddSwimmer}
+              className="w-full py-3.5 px-6 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-black text-xs sm:text-sm shadow-xl shadow-rose-500/30 flex items-center justify-center gap-2 cursor-pointer transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ تسجيل لاعب جديد بالصورة ورقم واتساب ولي الأمر</span>
             </button>
           </div>
         </div>
+      )}
 
-        {/* Global Key Stats Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 pt-5 border-t border-white/10">
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">المدرب المعتمد (الشريك)</div>
-            <div className="text-base sm:text-lg font-black text-white mt-0.5 truncate">
-              {coachesCount} مدرب (كابتن أسامة)
-            </div>
-          </div>
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">مساعدو المدربين</div>
-            <div className="text-base sm:text-lg font-black text-white mt-0.5">
-              {assistantsCount === 0 ? '0 مساعد (لم يفتح بعد)' : `${assistantsCount} مساعد`}
-            </div>
-          </div>
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-sky-200 font-medium">إجمالي السباحين المسجلين</div>
-            <div className="text-xl font-black text-white mt-0.5">{swimmers.length} سباح</div>
-          </div>
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10">
-            <div className="text-[11px] text-amber-200 font-medium">باقات الاشتراكات المتاحة</div>
-            <div className="text-xl font-black text-amber-300 mt-0.5">{subscriptionPlans.length} باقات</div>
-          </div>
-          <div className="bg-white/5 backdrop-blur-sm p-3 rounded-2xl border border-white/10 col-span-2 sm:col-span-1">
-            <div className="text-[11px] text-emerald-200 font-medium">مواقع التدريب بمطروح</div>
-            <div className="text-sm font-black text-emerald-300 mt-1">فندق السلام & النادي الاجتماعي</div>
+      {/* Simple Back Navigation Bar when inside a specific section */}
+      {activeTab !== 'home_grid' && (
+        <div className="bg-white border border-slate-200 rounded-3xl p-3.5 shadow-sm flex flex-wrap items-center justify-between gap-2">
+          <button
+            onClick={() => setActiveTab('home_grid')}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all cursor-pointer"
+          >
+            <ArrowRight className="w-4 h-4" />
+            <span>رجوع للواجهة المقسمة الرئيسية</span>
+          </button>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            <button
+              onClick={() => setActiveTab('swimmers_oversight')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                activeTab === 'swimmers_oversight' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              اللاعبين ({swimmers.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('daily_roll_call')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                activeTab === 'daily_roll_call' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              كراسة الغياب
+            </button>
+            <button
+              onClick={() => setActiveTab('subscription_settings')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                activeTab === 'subscription_settings' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              الاشتراكات
+            </button>
+            <button
+              onClick={() => setActiveTab('tasks')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                activeTab === 'tasks' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              المهام والكادر
+            </button>
+            <button
+              onClick={() => setActiveTab('attendance_penalties')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                activeTab === 'attendance_penalties' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-700'
+              }`}
+            >
+              حضور ومكافآت
+            </button>
           </div>
         </div>
-      </div>
-
-      {/* Main Tabs Navigation */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('swimmers_oversight')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'swimmers_oversight'
-              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>اللاعبين بالصور والاشتراكات ({swimmers.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('daily_roll_call')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'daily_roll_call'
-              ? 'bg-teal-600 text-white shadow-md shadow-teal-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <CheckCircle2 className="w-4 h-4" />
-          <span>📖 كراسة الغياب والتقييم الفني ({swimmers.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('subscription_settings')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'subscription_settings'
-              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-          <span>⚙️ إعدادات أنواع الاشتراكات والفروع ({subscriptionPlans.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('tasks')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'tasks'
-              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <CheckSquare className="w-4 h-4" />
-          <span>إدارة الكادر والمهام ({tasks.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('attendance_penalties')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer ${
-            activeTab === 'attendance_penalties'
-              ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <ShieldAlert className="w-4 h-4" />
-          <span>حضور ومكافآت الكادر ({staffLogs.length})</span>
-        </button>
-      </div>
+      )}
 
       {/* ==================== TAB 1: SWIMMERS WITH PHOTOS, SUBSCRIPTIONS & POST-WORKOUT LEVEL ==================== */}
       {activeTab === 'swimmers_oversight' && (
@@ -989,12 +1153,16 @@ export function HRDashboardView() {
                           {swimmer.assigned_coach_name || 'كابتن أسامة هيثم مصطفى'}
                         </td>
                         <td className="p-3">
-                          <div className="text-slate-900 font-medium">{swimmer.parent_name || 'ولي الأمر'}</div>
+                          <div className="text-slate-900 font-medium mb-1">{swimmer.parent_name || 'ولي الأمر'}</div>
                           <a
-                            href={`tel:${swimmer.parent_phone}`}
-                            className="font-mono text-sky-600 hover:underline text-[11px] font-bold block dir-ltr"
+                            href={formatWhatsAppUrl(swimmer.parent_phone, swimmer.name)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-mono text-[11px] font-bold shadow-xs transition-all"
+                            title="اضغط لفتح محادثة واتساب مباشرة مع ولي الأمر"
                           >
-                            {swimmer.parent_phone}
+                            <MessageCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{swimmer.parent_phone}</span>
                           </a>
                         </td>
                         <td className="p-3 text-center">
@@ -1174,7 +1342,16 @@ export function HRDashboardView() {
                           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
                             <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
                             <span>•</span>
-                            <span className="font-mono text-sky-600 font-bold">{swimmer.parent_phone}</span>
+                            <a
+                              href={formatWhatsAppUrl(swimmer.parent_phone, swimmer.name)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-mono text-[11px] font-bold transition-all"
+                              title="اضغط لفتح واتساب ولي الأمر"
+                            >
+                              <MessageCircle className="w-3 h-3" />
+                              <span>واتساب: {swimmer.parent_phone}</span>
+                            </a>
                           </div>
                         </div>
                       </div>
@@ -1975,7 +2152,17 @@ export function HRDashboardView() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href={formatWhatsAppUrl(inspectingSwimmer.parent_phone, inspectingSwimmer.name)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold font-mono text-xs shadow-sm transition-all"
+                  title="اضغط لفتح واتساب ولي الأمر"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>واتساب: {inspectingSwimmer.parent_phone}</span>
+                </a>
                 <span className="px-3 py-1 bg-white border border-sky-200 rounded-xl text-sky-800 font-bold text-xs shadow-sm">
                   المستوى الحالي: {inspectingSwimmer.level}
                 </span>
