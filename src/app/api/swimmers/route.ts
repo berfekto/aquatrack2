@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
       gender,
       birth_date,
       group_name,
+      training_days,
+      training_time,
       health_notes,
     } = body;
 
@@ -69,6 +71,8 @@ export async function POST(req: NextRequest) {
       gender: gender || 'male',
       birth_date: birth_date || undefined,
       group_name: group_name?.trim() || undefined,
+      training_days: training_days || 'السبت والثلاثاء',
+      training_time: training_time || 'من 6 إلى 7 م',
       health_notes: health_notes?.trim() || '',
     });
 

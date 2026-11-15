@@ -393,6 +393,8 @@ export function initDatabase() {
   try { db.exec("ALTER TABLE swimmers ADD COLUMN branch_name TEXT DEFAULT 'فندق السلام للقوات المسلحة - مطروح';"); } catch (e) {}
   try { db.exec("ALTER TABLE swimmers ADD COLUMN avatar TEXT;"); } catch (e) {}
   try { db.exec("ALTER TABLE swimmers ADD COLUMN training_days TEXT DEFAULT 'السبت والثلاثاء';"); } catch (e) {}
+  try { db.exec("ALTER TABLE swimmers ADD COLUMN training_time TEXT DEFAULT 'من 6 إلى 7 م';"); } catch (e) {}
+  try { db.exec("ALTER TABLE coach_briefings ADD COLUMN training_time TEXT DEFAULT 'من 6 إلى 7 م';"); } catch (e) {}
 
   // Seed default subscription plans if empty
   const plansCount = (db.prepare('SELECT COUNT(*) as count FROM subscription_plans').get() as { count: number }).count;
@@ -777,6 +779,13 @@ function migrateToMatrouhProduction() {
       END
       WHERE training_days IS NULL OR training_days = ''
     `).run();
+
+    db.prepare("UPDATE swimmers SET training_time = 'من 6 إلى 7 م' WHERE id IN ('swim-1', 'swim-2') AND (training_time IS NULL OR training_time = '')").run();
+    db.prepare("UPDATE swimmers SET training_time = 'من 7 إلى 8 م' WHERE id IN ('swim-3') AND (training_time IS NULL OR training_time = '' OR training_time = 'من 6 إلى 7 م')").run();
+    db.prepare("UPDATE swimmers SET training_time = 'من 8 إلى 9 م' WHERE id IN ('swim-6') AND (training_time IS NULL OR training_time = '' OR training_time = 'من 6 إلى 7 م')").run();
+    db.prepare("UPDATE swimmers SET training_time = 'من 6 إلى 7 م' WHERE id IN ('swim-4', 'swim-5') AND (training_time IS NULL OR training_time = '')").run();
+    db.prepare("UPDATE swimmers SET training_time = 'من 7 إلى 8 م' WHERE id IN ('swim-7', 'swim-8') AND (training_time IS NULL OR training_time = '' OR training_time = 'من 6 إلى 7 م')").run();
+    db.prepare("UPDATE swimmers SET training_time = 'من 6 إلى 7 م' WHERE training_time IS NULL OR training_time = ''").run();
 
     // Seed initial automatic night-before coach briefing if empty
     const briefingsCount = (db.prepare('SELECT COUNT(*) as count FROM coach_briefings').get() as { count: number }).count;

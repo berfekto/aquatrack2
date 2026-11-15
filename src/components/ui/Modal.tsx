@@ -31,13 +31,20 @@ export function Modal({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
+    const handlePopState = (e: PopStateEvent) => {
+      e.stopImmediatePropagation();
+      onClose();
+    };
     if (isOpen) {
       document.body.style.overflow = 'hidden';
+      window.history.pushState({ modalOpen: true }, '');
       window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('popstate', handlePopState, true);
     }
     return () => {
       document.body.style.overflow = 'unset';
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('popstate', handlePopState, true);
     };
   }, [isOpen, onClose]);
 

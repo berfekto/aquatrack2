@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, Academy, AppNotification, DashboardStats, User } from '@/lib/types';
 
 interface StaffUserItem extends User {
@@ -63,13 +63,74 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [currentRole, setCurrentRole] = useState<UserRole>('super_admin');
   const [currentAcademyId, setCurrentAcademyId] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<string>('hr_dashboard');
+  const [activeTab, setActiveTabState] = useState<string>('hr_dashboard');
   const [academies, setAcademies] = useState<Academy[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [staffList, setStaffList] = useState<StaffUserItem[]>([]);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpenState] = useState(false);
   const [coachId, setCoachId] = useState<string>('user-coach-1');
+
+  const tabHistoryRef = useRef<string[]>(['hr_dashboard']);
+  const mobileMenuOpenRef = useRef(false);
+
+  const setMobileMenuOpen = useCallback((open: boolean) => {
+    mobileMenuOpenRef.current = open;
+    setMobileMenuOpenState(open);
+    if (open && typeof window !== 'undefined') {
+      window.history.pushState({ aquatrackMenu: true }, '');
+    }
+  }, []);
+
+  const setActiveTab = useCallback((nextTab: string) => {
+    setActiveTabState(prev => {
+      if (prev !== nextTab) {
+        tabHistoryRef.current.push(nextTab);
+        if (typeof window !== 'undefined') {
+          window.history.pushState({ aquatrackTab: nextTab }, '');
+        }
+      }
+      return nextTab;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    // Push initial guard states so edge-swipe never exits the app
+    window.history.replaceState({ aquatrackRoot: true }, '');
+    window.history.pushState({ aquatrackGuard: true }, '');
+
+    const handlePopState = (e: PopStateEvent) => {
+      // 1. If 3-lines menu is open, close it first
+      if (mobileMenuOpenRef.current) {
+        mobileMenuOpenRef.current = false;
+        setMobileMenuOpenState(false);
+        return;
+      }
+
+      // 2. Ask active dashboard view if it can go back a section internally
+      const sectionEvent = new CustomEvent('aquatrack:back-gesture', { cancelable: true });
+      const notCancelled = window.dispatchEvent(sectionEvent);
+      if (!notCancelled) {
+        // Handled by internal section stack (e.g. HRDashboardView went from 'tasks' -> 'home_grid')
+        return;
+      }
+
+      // 3. Otherwise pop the top-level tab history stack
+      if (tabHistoryRef.current.length > 1) {
+        tabHistoryRef.current.pop();
+        const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1] || 'hr_dashboard';
+        setActiveTabState(prevTab);
+        return;
+      }
+
+      // 4. At the root screen: re-push guard state so the browser does not close the app
+      window.history.pushState({ aquatrackGuard: true }, '');
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Set default view based on user role
   const applyUserRoleAndPreferences = useCallback((user: User) => {

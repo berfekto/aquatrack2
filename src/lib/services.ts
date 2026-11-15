@@ -1769,13 +1769,16 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
   const now = new Date().toISOString();
   const coach = getUserById(data.assigned_coach_id);
   const code = data.code || `SW-${Math.floor(100 + Math.random() * 900)}`;
+  const days = data.training_days || 'السبت والثلاثاء';
+  const time = data.training_time || 'من 6 إلى 7 م';
+  const groupName = data.group_name || `مجموعة ${days} (${time})`;
 
   db.prepare(`
     INSERT INTO swimmers (
       id, name, code, birth_date, gender, parent_name, parent_phone, emergency_phone,
       level, subscription_type, branch_name, avatar,
-      assigned_coach_id, assigned_coach_name, group_name, training_days, health_notes, status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      assigned_coach_id, assigned_coach_name, group_name, training_days, training_time, health_notes, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -1791,8 +1794,9 @@ export function createSwimmer(data: Omit<Swimmer, 'id' | 'created_at' | 'code' |
     data.avatar || '',
     data.assigned_coach_id,
     coach?.name || 'كابتن أسامة هيثم مصطفى',
-    data.group_name || '',
-    data.training_days || 'السبت والثلاثاء',
+    groupName,
+    days,
+    time,
     data.health_notes || '',
     data.status || 'active',
     now
@@ -1812,6 +1816,13 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
     coachName = coach?.name || coachName;
   }
 
+  const nextDays = data.training_days !== undefined ? data.training_days : current.training_days;
+  const nextTime = data.training_time !== undefined ? data.training_time : current.training_time;
+  const nextGroupName =
+    data.group_name !== undefined && data.group_name.trim()
+      ? data.group_name
+      : `مجموعة ${nextDays || 'السبت والثلاثاء'} (${nextTime || 'من 6 إلى 7 م'})`;
+
   db.prepare(`
     UPDATE swimmers SET
       name = COALESCE(?, name),
@@ -1826,6 +1837,7 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
       emergency_phone = COALESCE(?, emergency_phone),
       group_name = COALESCE(?, group_name),
       training_days = COALESCE(?, training_days),
+      training_time = COALESCE(?, training_time),
       health_notes = COALESCE(?, health_notes),
       status = COALESCE(?, status)
     WHERE id = ?
@@ -1840,8 +1852,9 @@ export function updateSwimmer(id: string, data: Partial<Swimmer>): Swimmer {
     data.parent_phone !== undefined ? data.parent_phone : null,
     data.parent_name !== undefined ? data.parent_name : null,
     data.emergency_phone !== undefined ? data.emergency_phone : null,
-    data.group_name !== undefined ? data.group_name : null,
+    nextGroupName,
     data.training_days !== undefined ? data.training_days : null,
+    data.training_time !== undefined ? data.training_time : null,
     data.health_notes !== undefined ? data.health_notes : null,
     data.status !== undefined ? data.status : null,
     id
@@ -1998,28 +2011,28 @@ export function recordSwimmerRollCall(
   return insertedLogs;
 }
 
-function getScheduleBriefingMeta(trainingDays: string): { briefingNightLabel: string; nextSessionLabel: string } {
+function getScheduleBriefingMeta(trainingDays: string, trainingTime = 'من 6 إلى 7 م'): { briefingNightLabel: string; nextSessionLabel: string } {
   if (trainingDays.includes('السبت') && trainingDays.includes('الثلاثاء')) {
     return {
-      briefingNightLabel: 'تُرسل تلقائياً الإثنين بالليل (لتمرينة الثلاثاء) والجمعة بالليل (لتمرينة السبت)',
-      nextSessionLabel: 'تحضير تمرينة الثلاثاء / السبت القادمة (مجموعة السبت والثلاثاء)',
+      briefingNightLabel: `تُرسل تلقائياً الإثنين بالليل (لتمرينة الثلاثاء) والجمعة بالليل (لتمرينة السبت) • ميعاد (${trainingTime})`,
+      nextSessionLabel: `مجموعة السبت والثلاثاء • الساعة (${trainingTime})`,
     };
   }
   if (trainingDays.includes('الأحد') && trainingDays.includes('الأربعاء')) {
     return {
-      briefingNightLabel: 'تُرسل تلقائياً الثلاثاء بالليل (لتمرينة الأربعاء) والسبت بالليل (لتمرينة الأحد)',
-      nextSessionLabel: 'تحضير تمرينة الأربعاء / الأحد القادمة (مجموعة الأحد والأربعاء)',
+      briefingNightLabel: `تُرسل تلقائياً الثلاثاء بالليل (لتمرينة الأربعاء) والسبت بالليل (لتمرينة الأحد) • ميعاد (${trainingTime})`,
+      nextSessionLabel: `مجموعة الأحد والأربعاء • الساعة (${trainingTime})`,
     };
   }
   if (trainingDays.includes('الإثنين') && trainingDays.includes('الخميس')) {
     return {
-      briefingNightLabel: 'تُرسل تلقائياً الأربعاء بالليل (لتمرينة الخميس) والأحد بالليل (لتمرينة الإثنين)',
-      nextSessionLabel: 'تحضير تمرينة الخميس / الإثنين القادمة (مجموعة الإثنين والخميس)',
+      briefingNightLabel: `تُرسل تلقائياً الأربعاء بالليل (لتمرينة الخميس) والأحد بالليل (لتمرينة الإثنين) • ميعاد (${trainingTime})`,
+      nextSessionLabel: `مجموعة الإثنين والخميس • الساعة (${trainingTime})`,
     };
   }
   return {
-    briefingNightLabel: `تُرسل تلقائياً ليلة التمرين للمدرب (${trainingDays})`,
-    nextSessionLabel: `تحضير التمرينة القادمة (مجموعة ${trainingDays})`,
+    briefingNightLabel: `تُرسل تلقائياً ليلة التمرين للمدرب (${trainingDays} • ${trainingTime})`,
+    nextSessionLabel: `مجموعة ${trainingDays} • الساعة (${trainingTime})`,
   };
 }
 
@@ -2033,20 +2046,27 @@ export function syncCoachBriefingsForGroups(
 
   for (const s of allSwimmers) {
     const days = s.training_days || 'السبت والثلاثاء';
-    const key = `${s.assigned_coach_id || 'user-coach-1'}||${days}`;
+    const time = s.training_time || 'من 6 إلى 7 م';
+    const key = `${s.assigned_coach_id || 'user-coach-1'}||${days}||${time}`;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(s);
   }
 
   const now = new Date().toISOString();
+  // Clean up old un-timed briefing keys so there are no duplicates
+  try {
+    db.prepare('DELETE FROM coach_briefings').run();
+  } catch {}
+
   const upsertBriefing = db.prepare(`
     INSERT INTO coach_briefings (
-      id, coach_id, coach_name, training_days, branch_name,
+      id, coach_id, coach_name, training_days, training_time, branch_name,
       source_session_date, briefing_night_label, next_session_label,
       swimmers_json, created_by_hr_name, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       coach_name = excluded.coach_name,
+      training_time = excluded.training_time,
       branch_name = excluded.branch_name,
       source_session_date = excluded.source_session_date,
       briefing_night_label = excluded.briefing_night_label,
@@ -2057,11 +2077,11 @@ export function syncCoachBriefingsForGroups(
   `);
 
   for (const [key, list] of grouped.entries()) {
-    const [coachId, trainingDays] = key.split('||');
+    const [coachId, trainingDays, trainingTime] = key.split('||');
     const coach = getUserById(coachId);
     const coachName = coach?.name || 'كابتن أسامة هيثم مصطفى';
     const branchName = list[0]?.branch_name || 'فندق السلام للقوات المسلحة - مطروح';
-    const meta = getScheduleBriefingMeta(trainingDays);
+    const meta = getScheduleBriefingMeta(trainingDays, trainingTime);
 
     const items: CoachBriefingItem[] = list.map(s => {
       const latestLog = db.prepare(`
@@ -2081,15 +2101,17 @@ export function syncCoachBriefingsForGroups(
         last_status: latestLog?.status || 'present',
         evaluation_notes: latestLog?.evaluation_notes || '',
         branch_name: s.branch_name,
+        training_time: s.training_time || trainingTime,
       };
     });
 
-    const id = `brief-${coachId}-${Buffer.from(trainingDays).toString('hex').slice(0, 12)}`;
+    const id = `brief-${coachId}-${Buffer.from(`${trainingDays}-${trainingTime}`).toString('hex').slice(0, 16)}`;
     upsertBriefing.run(
       id,
       coachId,
       coachName,
       trainingDays,
+      trainingTime,
       branchName,
       sourceDate || new Date().toISOString().split('T')[0],
       meta.briefingNightLabel,
@@ -2104,8 +2126,8 @@ export function syncCoachBriefingsForGroups(
       createNotification({
         target_role: 'coach',
         target_user_id: coachId,
-        title: `📬 رسالة تحضير تمرينة (${trainingDays}) — مستويات اللاعبين`,
-        message: `تم تحديث مستويات لاعبي مجموعة (${trainingDays}) بواسطة الـ HR لتحضير التدريبات القادمة: ${summaryLines}`,
+        title: `📬 رسالة تحضير مجموعة (${trainingDays} • ${trainingTime})`,
+        message: `تم تحديث مستويات لاعبي مجموعة (${trainingDays} الساعة ${trainingTime}) بواسطة الـ HR لتحضير التدريبات القادمة: ${summaryLines}`,
         type: 'schedule',
         link: 'coach_dashboard',
       });

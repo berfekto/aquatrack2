@@ -84,6 +84,41 @@ const TRAINING_DAYS_PRESETS = [
   'الأحد والثلاثاء والخميس',
 ];
 
+const TRAINING_TIME_PRESETS = [
+  'من 4 إلى 5 م',
+  'من 5 إلى 6 م',
+  'من 6 إلى 7 م',
+  'من 7 إلى 8 م',
+  'من 8 إلى 9 م',
+  'من 9 إلى 10 م',
+];
+
+function getArabicDayNameFromDate(dateStr: string): string {
+  if (!dateStr) return 'السبت';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  const dayIdx = dt.getDay();
+  const map: Record<number, string> = {
+    0: 'الأحد',
+    1: 'الإثنين',
+    2: 'الثلاثاء',
+    3: 'الأربعاء',
+    4: 'الخميس',
+    5: 'الجمعة',
+    6: 'السبت',
+  };
+  return map[dayIdx] || 'السبت';
+}
+
+function doesGroupMatchDay(trainingDays: string, arabicDay: string): boolean {
+  if (!trainingDays) return false;
+  if (trainingDays.includes('يومياً')) return true;
+  if (arabicDay === 'الإثنين' || arabicDay === 'الاثنين') {
+    return trainingDays.includes('الإثنين') || trainingDays.includes('الاثنين');
+  }
+  return trainingDays.includes(arabicDay);
+}
+
 function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
   const reader = new FileReader();
   reader.onload = event => {
@@ -120,25 +155,58 @@ function compressImageFile(file: File, onDone: (dataUrl: string) => void) {
 export function HRDashboardView() {
   const { currentUser, staffList, refreshStaffList, registerStaff, setActiveTab: setGlobalTab, setMobileMenuOpen } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'home_grid' | 'swimmers_oversight' | 'daily_roll_call' | 'tasks' | 'attendance_penalties' | 'subscription_settings'>('home_grid');
+  type HRSectionTab = 'home_grid' | 'swimmers_oversight' | 'daily_roll_call' | 'tasks' | 'attendance_penalties' | 'subscription_settings';
+  const [activeTab, setActiveTabState] = useState<HRSectionTab>('home_grid');
+  const sectionHistoryRef = useRef<HRSectionTab[]>(['home_grid']);
   const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  const setActiveTab = useCallback((nextTab: HRSectionTab) => {
+    setActiveTabState((prev) => {
+      if (prev === nextTab) return prev;
+      sectionHistoryRef.current.push(nextTab);
+      if (typeof window !== 'undefined') {
+        window.history.pushState({ hrSection: nextTab }, '');
+      }
+      return nextTab;
+    });
+  }, []);
+
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
+      const detail = (e as CustomEvent).detail as HRSectionTab;
       if (detail) {
         setActiveTab(detail);
       }
     };
     window.addEventListener('aquatrack:navigate-section', handler);
     return () => window.removeEventListener('aquatrack:navigate-section', handler);
-  }, []);
+  }, [setActiveTab]);
+
+  useEffect(() => {
+    const onBackGesture = (e: Event) => {
+      if (sectionHistoryRef.current.length > 1) {
+        e.preventDefault();
+        sectionHistoryRef.current.pop();
+        const prevSection = sectionHistoryRef.current[sectionHistoryRef.current.length - 1] || 'home_grid';
+        setActiveTabState(prevSection);
+      } else if (activeTab !== 'home_grid') {
+        e.preventDefault();
+        sectionHistoryRef.current = ['home_grid'];
+        setActiveTabState('home_grid');
+      }
+    };
+    window.addEventListener('aquatrack:back-gesture', onBackGesture);
+    return () => window.removeEventListener('aquatrack:back-gesture', onBackGesture);
+  }, [activeTab]);
 
   // --- Daily Roll Call & Technical Evaluation Notebook (with HR) ---
   const [rollCallDate, setRollCallDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [rollCallBranchFilter, setRollCallBranchFilter] = useState<string>('all');
-  const [rollCallDaysFilter, setRollCallDaysFilter] = useState<string>('all');
+  const [rollCallDaysFilter, setRollCallDaysFilter] = useState<string>('auto_today');
+  const [rollCallGroupKeyFilter, setRollCallGroupKeyFilter] = useState<string>('all');
+  const [makeupGroupKeys, setMakeupGroupKeys] = useState<string[]>([]);
+  const [selectedMakeupToAdd, setSelectedMakeupToAdd] = useState<string>('');
   const [rollCallState, setRollCallState] = useState<Record<string, {
     status: 'present' | 'absent';
     level: string;
@@ -161,6 +229,7 @@ export function HRDashboardView() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskFilterStatus, setTaskFilterStatus] = useState<string>('all');
   const [taskFilterAssignee, setTaskFilterAssignee] = useState<string>('all');
+  const [inspectingStaffTasksUser, setInspectingStaffTasksUser] = useState<any | null>(null);
   const [isNewTaskModalOpen, setIsNewTaskModalOpen] = useState(false);
   const [newTaskForm, setNewTaskForm] = useState({
     title: '',
@@ -217,6 +286,8 @@ export function HRDashboardView() {
     emergency_phone: '',
     group_name: '',
     training_days: TRAINING_DAYS_PRESETS[0],
+    training_time: TRAINING_TIME_PRESETS[2],
+    custom_training_time: '',
     health_notes: '',
   });
 
@@ -328,34 +399,75 @@ export function HRDashboardView() {
     }));
   };
 
-  const handleSetAllRollCallAttendance = (status: 'present' | 'absent') => {
+  const rollCallDayName = getArabicDayNameFromDate(rollCallDate);
+
+  const isSwimmerInRollCallToday = useCallback(
+    (s: Swimmer) => {
+      if (rollCallBranchFilter !== 'all' && (s.branch_name || MATROUH_BRANCHES[0]) !== rollCallBranchFilter) {
+        return false;
+      }
+      const sDays = s.training_days || TRAINING_DAYS_PRESETS[0];
+      const sTime = s.training_time || TRAINING_TIME_PRESETS[2];
+      const groupKey = `${sDays}||${sTime}`;
+
+      if (rollCallGroupKeyFilter !== 'all' && groupKey !== rollCallGroupKeyFilter) {
+        return false;
+      }
+
+      // Makeup groups added by HR always appear on today's roll call
+      if (makeupGroupKeys.includes(groupKey) || makeupGroupKeys.includes(`${sDays}||ALL`)) {
+        return true;
+      }
+
+      if (rollCallDaysFilter === 'all') return true;
+      if (rollCallDaysFilter === 'auto_today') {
+        return doesGroupMatchDay(sDays, rollCallDayName);
+      }
+      return sDays === rollCallDaysFilter;
+    },
+    [rollCallBranchFilter, rollCallDaysFilter, rollCallGroupKeyFilter, makeupGroupKeys, rollCallDayName]
+  );
+
+  const handleSetAllRollCallAttendance = (status: 'present' | 'absent', targetList?: Swimmer[]) => {
+    const listToUpdate = targetList || swimmers.filter(isSwimmerInRollCallToday);
     setRollCallState(prev => {
       const next = { ...prev };
-      swimmers.forEach(s => {
-        if (next[s.id]) next[s.id] = { ...next[s.id], status };
+      listToUpdate.forEach(s => {
+        if (next[s.id]) {
+          next[s.id] = { ...next[s.id], status };
+        } else {
+          next[s.id] = { status, level: s.level, notes: '' };
+        }
       });
       return next;
     });
   };
 
-  const handleSaveRollCallNotebook = async () => {
+  const handleSaveRollCallNotebook = async (customTargetSwimmers?: Swimmer[], groupTitleLabel?: string) => {
     if (!currentUser) return;
     setRollCallSaving(true);
     setRollCallSuccessMsg('');
     try {
-      const targetSwimmers = swimmers.filter(
-        s =>
-          (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) &&
-          (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter)
-      );
+      const targetSwimmers = customTargetSwimmers || swimmers.filter(isSwimmerInRollCallToday);
       const records = targetSwimmers.map(s => {
         const st = rollCallState[s.id] || { status: 'present', level: s.level, notes: '' };
+        const sDays = s.training_days || TRAINING_DAYS_PRESETS[0];
+        const sTime = s.training_time || TRAINING_TIME_PRESETS[2];
+        const gKey = `${sDays}||${sTime}`;
+        const isMakeup =
+          !doesGroupMatchDay(sDays, rollCallDayName) &&
+          (makeupGroupKeys.includes(gKey) || makeupGroupKeys.includes(`${sDays}||ALL`));
+        const finalNotes =
+          isMakeup && !st.notes.includes('حصة تعويضية')
+            ? `[حصة تعويضية لمجموعة ${sDays} ${sTime}] ${st.notes}`.trim()
+            : st.notes;
+
         return {
           swimmer_id: s.id,
           date: rollCallDate,
           status: st.status,
           level_at_time: st.level,
-          evaluation_notes: st.notes,
+          evaluation_notes: finalNotes,
         };
       });
       const res = await fetch('/api/swimmer-logs', {
@@ -368,7 +480,11 @@ export function HRDashboardView() {
       });
       const data = await res.json();
       if (data.success) {
-        setRollCallSuccessMsg(`✅ تم حفظ غياب ومستويات التمرينة ليوم (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات التلقائية للمدرب ليلة التمرينة القادمة!`);
+        setRollCallSuccessMsg(
+          groupTitleLabel
+            ? `✅ تم حفظ غياب ومستويات (${groupTitleLabel}) ليوم ${rollCallDayName} (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات للمدرب!`
+            : `✅ تم حفظ غياب ومستويات جميع مجاميع يوم ${rollCallDayName} (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات التلقائية للمدرب ليلة التمرينة القادمة!`
+        );
         setTimeout(() => setRollCallSuccessMsg(''), 7000);
         await loadSwimmers();
       }
@@ -414,6 +530,8 @@ export function HRDashboardView() {
       emergency_phone: '',
       group_name: '',
       training_days: TRAINING_DAYS_PRESETS[0],
+      training_time: TRAINING_TIME_PRESETS[2],
+      custom_training_time: '',
       health_notes: '',
     });
     setIsSwimmerModalOpen(true);
@@ -422,6 +540,8 @@ export function HRDashboardView() {
   // Open Modal to Edit Existing Swimmer
   const handleOpenEditSwimmer = (swimmer: Swimmer) => {
     const isPreset = SWIMMER_LEVEL_PRESETS.includes(swimmer.level);
+    const currentTime = swimmer.training_time || TRAINING_TIME_PRESETS[2];
+    const isTimePreset = TRAINING_TIME_PRESETS.includes(currentTime);
     setEditingSwimmerId(swimmer.id);
     setSwimmerForm({
       name: swimmer.name || '',
@@ -437,6 +557,8 @@ export function HRDashboardView() {
       emergency_phone: swimmer.emergency_phone || '',
       group_name: swimmer.group_name || '',
       training_days: swimmer.training_days || TRAINING_DAYS_PRESETS[0],
+      training_time: isTimePreset ? currentTime : 'custom',
+      custom_training_time: isTimePreset ? '' : currentTime,
       health_notes: swimmer.health_notes || '',
     });
     setIsSwimmerModalOpen(true);
@@ -454,6 +576,13 @@ export function HRDashboardView() {
         ? SWIMMER_LEVEL_PRESETS[0]
         : swimmerForm.level;
 
+    const finalTrainingTime =
+      swimmerForm.training_time === 'custom' && swimmerForm.custom_training_time.trim()
+        ? swimmerForm.custom_training_time.trim()
+        : swimmerForm.training_time === 'custom'
+        ? TRAINING_TIME_PRESETS[2]
+        : swimmerForm.training_time;
+
     const payload = {
       id: editingSwimmerId || undefined,
       name: swimmerForm.name.trim(),
@@ -466,8 +595,9 @@ export function HRDashboardView() {
       parent_name: swimmerForm.parent_name.trim(),
       parent_phone: swimmerForm.parent_phone.trim(),
       emergency_phone: swimmerForm.emergency_phone.trim(),
-      group_name: swimmerForm.group_name.trim(),
+      group_name: `مجموعة ${swimmerForm.training_days} (${finalTrainingTime})`,
       training_days: swimmerForm.training_days,
+      training_time: finalTrainingTime,
       health_notes: swimmerForm.health_notes.trim(),
     };
 
@@ -635,7 +765,26 @@ export function HRDashboardView() {
     if (!confirm('هل أنت متأكد من حذف هذه المهمة؟')) return;
     try {
       const res = await fetch(`/api/tasks?id=${id}`, { method: 'DELETE' });
-      if (res.ok) loadTasks();
+      if (res.ok) {
+        await loadTasks();
+        await refreshStaffList();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleUpdateTaskStatus = async (taskId: string, status: 'pending' | 'in_progress' | 'completed') => {
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: taskId, status }),
+      });
+      if (res.ok) {
+        await loadTasks();
+        await refreshStaffList();
+      }
     } catch (e) {
       console.error(e);
     }
@@ -1134,6 +1283,11 @@ export function HRDashboardView() {
                           <div className="font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-lg inline-block text-[11px]">
                             💳 {swimmer.subscription_type || 'اشتراك شهري تأسيسي (8 حصص)'}
                           </div>
+                          <div className="mt-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 font-bold text-[10px]">
+                              📅 {swimmer.training_days || TRAINING_DAYS_PRESETS[0]} • ⏰ {swimmer.training_time || TRAINING_TIME_PRESETS[2]}
+                            </span>
+                          </div>
                           <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
                             <MapPin className="w-3 h-3 text-sky-600 shrink-0" />
                             <span>{swimmer.branch_name || 'فندق السلام للقوات المسلحة - مطروح'}</span>
@@ -1205,250 +1359,539 @@ export function HRDashboardView() {
         </div>
       )}
 
-      {/* ==================== TAB 1.5: DAILY ROLL CALL & TECHNICAL EVALUATION NOTEBOOK (كراسة الغياب والتقييم الفني) ==================== */}
-      {activeTab === 'daily_roll_call' && (
-        <div className="space-y-6">
-          {/* Workflow Banner */}
-          <div className="bg-teal-50/90 border border-teal-200 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="font-bold text-teal-950 text-xs sm:text-sm">
-                📖 كراسة الغياب ومستويات التمرينة (خاصة بالـ HR فقط — لعدم تشتيت المدرب)
-              </h3>
-              <p className="text-xs text-teal-800 mt-1 leading-relaxed">
-                يقوم مسؤول الـ HR بتسجيل غياب اللاعبين وسؤال الكابتن عن مستوياتهم بعد التمرينة، وتقوم المنظومة <strong>تلقائياً ليلة التمرينة التالية</strong> (مثلاً: الإثنين بالليل لمجموعة السبت والثلاثاء) بإرسال رسالة للمدرب بمستويات كل لاعب في المجموعة لتحضير التدريبات.
-              </p>
-            </div>
-          </div>
+      {/* ==================== TAB 1.5: DAILY ROLL CALL & TECHNICAL EVALUATION NOTEBOOK (كراسة الغياب والتقييم الفني مقسمة بالمجاميع والساعات + تعويضات) ==================== */}
+      {activeTab === 'daily_roll_call' && (() => {
+        // Compute all distinct timed groups in the academy
+        const allGroupsMap = new Map<string, { key: string; days: string; time: string; swimmers: Swimmer[] }>();
+        swimmers.forEach(s => {
+          if (rollCallBranchFilter !== 'all' && (s.branch_name || MATROUH_BRANCHES[0]) !== rollCallBranchFilter) {
+            return;
+          }
+          const d = s.training_days || TRAINING_DAYS_PRESETS[0];
+          const t = s.training_time || TRAINING_TIME_PRESETS[2];
+          const k = `${d}||${t}`;
+          if (!allGroupsMap.has(k)) {
+            allGroupsMap.set(k, { key: k, days: d, time: t, swimmers: [] });
+          }
+          allGroupsMap.get(k)!.swimmers.push(s);
+        });
 
-          {rollCallSuccessMsg && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-              <span>{rollCallSuccessMsg}</span>
-            </div>
-          )}
+        const allGroupsList = Array.from(allGroupsMap.values()).sort((a, b) => {
+          if (a.days !== b.days) return a.days.localeCompare(b.days, 'ar');
+          return a.time.localeCompare(b.time, 'ar');
+        });
 
-          {/* Roll Call Controls */}
-          <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-teal-600" />
-                <span className="text-xs font-bold text-slate-700">تاريخ الحصة والتمرين:</span>
-                <input
-                  type="date"
-                  value={rollCallDate}
-                  onChange={e => setRollCallDate(e.target.value)}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900 outline-none font-mono"
-                />
+        // Filter groups that should appear on today's sheet (either matching day/filter OR added as makeup)
+        const visibleGroups = allGroupsList.filter(g => {
+          if (rollCallGroupKeyFilter !== 'all' && g.key !== rollCallGroupKeyFilter) {
+            return false;
+          }
+          const isMakeup = makeupGroupKeys.includes(g.key) || makeupGroupKeys.includes(`${g.days}||ALL`);
+          if (isMakeup) return true;
+          if (rollCallDaysFilter === 'all') return true;
+          if (rollCallDaysFilter === 'auto_today') {
+            return doesGroupMatchDay(g.days, rollCallDayName);
+          }
+          return g.days === rollCallDaysFilter;
+        });
+
+        // Groups from OTHER days that can be pulled in as Makeup ("شقلبة وتعويضات")
+        const otherDayGroups = allGroupsList.filter(
+          g =>
+            !doesGroupMatchDay(g.days, rollCallDayName) &&
+            !makeupGroupKeys.includes(g.key) &&
+            !makeupGroupKeys.includes(`${g.days}||ALL`)
+        );
+
+        const visibleSwimmersFlat = visibleGroups.flatMap(g => g.swimmers);
+        const presentTotal = visibleSwimmersFlat.filter(s => (rollCallState[s.id]?.status || 'present') === 'present').length;
+        const absentTotal = visibleSwimmersFlat.filter(s => rollCallState[s.id]?.status === 'absent').length;
+
+        return (
+          <div className="space-y-6">
+            {/* Top Banner: Day-Aware Divided Groups + Makeup Explanation */}
+            <div className="bg-gradient-to-r from-teal-900 to-slate-900 text-white rounded-3xl p-4 sm:p-5 shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-200 text-xs font-bold mb-2">
+                  <span>📅 يوم التمرين المحدد: {rollCallDayName} ({rollCallDate})</span>
+                  <span>•</span>
+                  <span>مقسمة لمجاميع بالساعة</span>
+                </div>
+                <h3 className="font-black text-sm sm:text-base">
+                  📖 كراسة الغياب والتقييم الفني (مقسمة لمجاميع بالساعة + نظام تعويضات المجاميع)
+                </h3>
+                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  تظهر تلقائياً <strong>مجاميع يوم ({rollCallDayName}) فقط</strong> مقسمة كل مجموعة في صندوق مستقل حسب ساعتها (مثلاً: من 6 لـ 7، ومن 7 لـ 8)، ولو في مجموعة من يوم تاني هتعوض النهارده تقدر تستدعيها بضغطة زر.
+                </p>
               </div>
 
-              <select
-                value={rollCallDaysFilter}
-                onChange={e => setRollCallDaysFilter(e.target.value)}
-                className="bg-teal-50 border border-teal-200 rounded-xl px-3 py-1.5 text-xs font-bold text-teal-900 outline-none"
-              >
-                <option value="all">📅 كل المجموعات (السبت والثلاثاء / الأحد والأربعاء...)</option>
-                {TRAINING_DAYS_PRESETS.map(d => (
-                  <option key={d} value={d}>مجموعة ({d})</option>
-                ))}
-              </select>
-
-              <select
-                value={rollCallBranchFilter}
-                onChange={e => setRollCallBranchFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none"
-              >
-                <option value="all">📍 جميع مواقع مطروح (فندق السلام & النادي الاجتماعي)</option>
-                {MATROUH_BRANCHES.map(b => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-
-              <div className="flex items-center gap-1.5 border-r border-slate-200 pr-3 mr-1">
-                <button
-                  type="button"
-                  onClick={() => handleSetAllRollCallAttendance('present')}
-                  className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                >
-                  ✓ تحضير الكل حاضر
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSetAllRollCallAttendance('absent')}
-                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                >
-                  ✕ تحضير الكل غائب
-                </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-400/30 px-3 py-2 rounded-2xl">
+                  ✓ حاضر: {presentTotal}
+                </span>
+                <span className="text-xs font-bold text-rose-300 bg-rose-500/20 border border-rose-400/30 px-3 py-2 rounded-2xl">
+                  ✕ غائب: {absentTotal}
+                </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl">
-                الحاضرين: {swimmers.filter(s => (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) && (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter) && (rollCallState[s.id]?.status || 'present') === 'present').length}
-              </span>
-              <span className="text-xs font-bold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-xl">
-                الغائبين: {swimmers.filter(s => (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) && (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter) && rollCallState[s.id]?.status === 'absent').length}
-              </span>
-            </div>
-          </div>
+            {rollCallSuccessMsg && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center gap-2.5">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                <span>{rollCallSuccessMsg}</span>
+              </div>
+            )}
 
-          {/* Swimmers Roll Call Cards */}
-          <div className="space-y-3">
-            {swimmers
-              .filter(
-                s =>
-                  (rollCallBranchFilter === 'all' || (s.branch_name || MATROUH_BRANCHES[0]) === rollCallBranchFilter) &&
-                  (rollCallDaysFilter === 'all' || (s.training_days || TRAINING_DAYS_PRESETS[0]) === rollCallDaysFilter)
-              )
-              .map(swimmer => {
-                const current = rollCallState[swimmer.id] || {
-                  status: 'present',
-                  level: swimmer.level,
-                  notes: '',
-                };
-                const isPresent = current.status === 'present';
+            {/* Main Controls & Makeup ("شقلبة التعويضات") Bar */}
+            <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-1.5">
+                    <Calendar className="w-4 h-4 text-teal-600" />
+                    <span className="text-xs font-bold text-slate-700">تاريخ الحصة:</span>
+                    <input
+                      type="date"
+                      value={rollCallDate}
+                      onChange={e => {
+                        setRollCallDate(e.target.value);
+                        setRollCallGroupKeyFilter('all');
+                      }}
+                      className="bg-transparent text-xs font-bold text-slate-900 outline-none font-mono"
+                    />
+                    <span className="px-2 py-0.5 rounded-lg bg-teal-600 text-white text-[11px] font-bold">
+                      {rollCallDayName}
+                    </span>
+                  </div>
 
-                return (
-                  <div
-                    key={swimmer.id}
-                    className={`p-4 sm:p-5 rounded-3xl border transition-all ${
-                      isPresent
-                        ? 'bg-white border-slate-200 hover:border-emerald-300 shadow-sm'
-                        : 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                  <select
+                    value={rollCallDaysFilter}
+                    onChange={e => {
+                      setRollCallDaysFilter(e.target.value);
+                      setRollCallGroupKeyFilter('all');
+                    }}
+                    className="bg-teal-50 border border-teal-200 rounded-2xl px-3 py-2 text-xs font-bold text-teal-950 outline-none"
+                  >
+                    <option value="auto_today">
+                      ⚡ تلقائي: مجاميع يوم ({rollCallDayName}) الأساسية فقط
+                    </option>
+                    <option value="all">📅 إظهار كل أيام الأسبوع معاً</option>
+                    {TRAINING_DAYS_PRESETS.map(d => (
+                      <option key={d} value={d}>فقط مجاميع ({d})</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={rollCallBranchFilter}
+                    onChange={e => setRollCallBranchFilter(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-xs font-semibold text-slate-800 outline-none"
+                  >
+                    <option value="all">📍 كل الفروع (فندق السلام & النادي الاجتماعي)</option>
+                    {MATROUH_BRANCHES.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllRollCallAttendance('present', visibleSwimmersFlat)}
+                    className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-2xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    ✓ تحضير كل المعروض حاضر
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetAllRollCallAttendance('absent', visibleSwimmersFlat)}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-2xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    ✕ تحضير كل المعروض غائب
+                  </button>
+                </div>
+              </div>
+
+              {/* ==================== MAKEUP / COMPENSATION BAR ("شقلبة المجاميع والتعويضات") ==================== */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/90 border border-amber-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-black text-amber-950 flex items-center gap-1.5">
+                    <RefreshCw className="w-4 h-4 text-amber-600" />
+                    <span>🔄 نظام تعويضات المجاميع (مثلاً: تعويض مجموعة سبت وثلاثاء في يوم أحد وأربعاء):</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    اختر أي مجموعة من يوم آخر لإضافتها في كراسة غياب اليوم ({rollCallDayName}) كحصة تعويضية منفصلة:
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={selectedMakeupToAdd}
+                    onChange={e => setSelectedMakeupToAdd(e.target.value)}
+                    className="bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-bold text-amber-950 outline-none"
+                  >
+                    <option value="">+ اختر مجموعة من يوم آخر لتعويضها اليوم...</option>
+                    {otherDayGroups.map(g => (
+                      <option key={g.key} value={g.key}>
+                        🔄 مجموعة ({g.days}) — الساعة ({g.time}) [{g.swimmers.length} لاعب]
+                      </option>
+                    ))}
+                    {TRAINING_DAYS_PRESETS.filter(d => !doesGroupMatchDay(d, rollCallDayName)).map(d => (
+                      <option key={`${d}||ALL`} value={`${d}||ALL`}>
+                        🔄 كل مجاميع ({d}) بالكامل بجميع ساعاتها
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedMakeupToAdd) return;
+                      if (!makeupGroupKeys.includes(selectedMakeupToAdd)) {
+                        setMakeupGroupKeys(prev => [...prev, selectedMakeupToAdd]);
+                      }
+                      setSelectedMakeupToAdd('');
+                    }}
+                    disabled={!selectedMakeupToAdd}
+                    className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                  >
+                    + إضافة للتعويض اليوم
+                  </button>
+
+                  {makeupGroupKeys.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMakeupGroupKeys([])}
+                      className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 text-xs font-bold cursor-pointer"
+                    >
+                      إلغاء التعويضات ({makeupGroupKeys.length})
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Hour/Group Selector Pills */}
+              {visibleGroups.length > 0 && (
+                <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500 ml-1">انتقل لمجموعة محددة بالساعة:</span>
+                  <button
+                    type="button"
+                    onClick={() => setRollCallGroupKeyFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      rollCallGroupKeyFilter === 'all'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                     }`}
                   >
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      <div className="min-w-0 flex items-center gap-3.5">
-                        <img
-                          src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
-                          alt={swimmer.name}
-                          className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 shadow-xs shrink-0"
-                        />
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-bold text-slate-900 text-sm sm:text-base">{swimmer.name}</span>
-                            <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">{swimmer.code}</span>
-                            <span className="text-[11px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
-                              📅 مجموعة: {swimmer.training_days || TRAINING_DAYS_PRESETS[0]}
-                            </span>
-                            {swimmer.subscription_type && (
-                              <span className="text-[11px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-lg">
-                                💳 {swimmer.subscription_type}
+                    كل مجاميع اليوم ({visibleGroups.length} مجاميع • {visibleSwimmersFlat.length} لاعب)
+                  </button>
+                  {allGroupsList
+                    .filter(g => {
+                      const isMakeup = makeupGroupKeys.includes(g.key) || makeupGroupKeys.includes(`${g.days}||ALL`);
+                      if (isMakeup) return true;
+                      if (rollCallDaysFilter === 'all') return true;
+                      if (rollCallDaysFilter === 'auto_today') return doesGroupMatchDay(g.days, rollCallDayName);
+                      return g.days === rollCallDaysFilter;
+                    })
+                    .map(g => {
+                      const isMakeup =
+                        !doesGroupMatchDay(g.days, rollCallDayName) &&
+                        (makeupGroupKeys.includes(g.key) || makeupGroupKeys.includes(`${g.days}||ALL`));
+                      return (
+                        <button
+                          key={g.key}
+                          type="button"
+                          onClick={() => setRollCallGroupKeyFilter(g.key === rollCallGroupKeyFilter ? 'all' : g.key)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                            rollCallGroupKeyFilter === g.key
+                              ? 'bg-teal-600 text-white shadow-sm'
+                              : isMakeup
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+                              : 'bg-teal-50 text-teal-900 border border-teal-200 hover:bg-teal-100'
+                          }`}
+                        >
+                          <span>{isMakeup ? '🔄' : '⏰'}</span>
+                          <span>{g.days} • {g.time}</span>
+                          <span className="px-1.5 py-0.2 rounded-md bg-black/10 text-[10px] font-mono">
+                            {g.swimmers.length}
+                          </span>
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+
+            {/* ==================== DIVIDED GROUP CARDS (كل مجموعة بالساعة في صندوق مستقل) ==================== */}
+            {visibleGroups.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-3xl p-8 text-center space-y-3">
+                <div className="text-slate-700 font-bold text-sm">
+                  لا توجد مجاميع أساسية مسجلة في يوم ({rollCallDayName}).
+                </div>
+                <p className="text-xs text-slate-500">
+                  يمكنك اختيار مجموعة تعويضية من الشريط الأصفر بالأعلى، أو الضغط على الزر بالأسفل لإظهار كل مجاميع الأسبوع:
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setRollCallDaysFilter('all')}
+                  className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold cursor-pointer"
+                >
+                  📅 إظهار جميع المجاميع لكل الأيام
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {visibleGroups.map(group => {
+                  const isMakeupGroup =
+                    !doesGroupMatchDay(group.days, rollCallDayName) &&
+                    (makeupGroupKeys.includes(group.key) || makeupGroupKeys.includes(`${group.days}||ALL`));
+                  const groupPresent = group.swimmers.filter(
+                    s => (rollCallState[s.id]?.status || 'present') === 'present'
+                  ).length;
+                  const groupAbsent = group.swimmers.filter(s => rollCallState[s.id]?.status === 'absent').length;
+                  const groupTitle = `مجموعة ${group.days} — الساعة ${group.time}`;
+
+                  return (
+                    <div
+                      key={group.key}
+                      className={`rounded-3xl border-2 overflow-hidden shadow-sm transition-all ${
+                        isMakeupGroup
+                          ? 'border-amber-300 bg-amber-50/20'
+                          : 'border-teal-200 bg-white'
+                      }`}
+                    >
+                      {/* Group Box Header */}
+                      <div
+                        className={`p-4 sm:p-5 border-b flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
+                          isMakeupGroup
+                            ? 'bg-gradient-to-r from-amber-100/90 to-orange-50 border-amber-200'
+                            : 'bg-gradient-to-r from-teal-50/90 to-sky-50/70 border-teal-100'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span
+                            className={`px-3.5 py-1.5 rounded-2xl text-xs sm:text-sm font-black shadow-xs flex items-center gap-1.5 ${
+                              isMakeupGroup
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-teal-700 text-white'
+                            }`}
+                          >
+                            <Clock className="w-4 h-4" />
+                            <span>⏰ الساعة: {group.time}</span>
+                          </span>
+
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="font-black text-slate-900 text-sm sm:text-base">
+                                📅 مجموعة ({group.days})
+                              </h4>
+                              <span className="px-2.5 py-0.5 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold">
+                                {group.swimmers.length} لاعبين في هذه الساعة
                               </span>
-                            )}
-                            <span className="text-[11px] font-semibold text-teal-800 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded-lg">
-                              📍 {swimmer.branch_name || MATROUH_BRANCHES[0]}
-                            </span>
+                              {isMakeupGroup && (
+                                <span className="px-2.5 py-0.5 rounded-xl bg-amber-500 text-white text-[11px] font-black">
+                                  🔄 حصة تعويضية في يوم {rollCallDayName}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-0.5">
+                              حاضر بالمجموعة: <strong className="text-emerald-700">{groupPresent}</strong> • غائب بالمجموعة: <strong className="text-rose-600">{groupAbsent}</strong>
+                            </p>
                           </div>
-                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                            <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
-                            <span>•</span>
-                            <a
-                              href={formatWhatsAppUrl(swimmer.parent_phone, swimmer.name)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-mono text-[11px] font-bold transition-all"
-                              title="اضغط لفتح واتساب ولي الأمر"
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleSetAllRollCallAttendance('present', group.swimmers)}
+                            className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold cursor-pointer"
+                          >
+                            ✓ تحضير المجموعة حاضر
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetAllRollCallAttendance('absent', group.swimmers)}
+                            className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold cursor-pointer"
+                          >
+                            ✕ تحضير المجموعة غائب
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveRollCallNotebook(group.swimmers, groupTitle)}
+                            disabled={rollCallSaving}
+                            className="px-4 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-sm cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>حفظ غياب ومستوى هذه المجموعة</span>
+                          </button>
+                          {isMakeupGroup && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMakeupGroupKeys(prev =>
+                                  prev.filter(k => k !== group.key && k !== `${group.days}||ALL`)
+                                )
+                              }
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold cursor-pointer"
+                              title="إزالة هذه المجموعة التعويضية من كراسة اليوم"
                             >
-                              <MessageCircle className="w-3 h-3" />
-                              <span>واتساب: {swimmer.parent_phone}</span>
-                            </a>
-                          </div>
+                              ✕ إزالة التعويض
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleRollCallStatus(swimmer.id, 'present')}
-                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            isPresent
-                              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-500'
-                              : 'bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
-                          }`}
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>حاضر بالتمرين</span>
-                        </button>
+                      {/* Swimmers Inside This Specific Timed Group */}
+                      <div className="p-4 space-y-3 divide-y divide-slate-100">
+                        {group.swimmers.map(swimmer => {
+                          const current = rollCallState[swimmer.id] || {
+                            status: 'present',
+                            level: swimmer.level,
+                            notes: '',
+                          };
+                          const isPresent = current.status === 'present';
 
-                        <button
-                          type="button"
-                          onClick={() => handleToggleRollCallStatus(swimmer.id, 'absent')}
-                          className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                            !isPresent
-                              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-500'
-                              : 'bg-slate-100 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
-                          }`}
-                        >
-                          <XCircle className="w-4 h-4" />
-                          <span>غائب اليوم</span>
-                        </button>
+                          return (
+                            <div
+                              key={swimmer.id}
+                              className={`p-4 rounded-2xl border transition-all ${
+                                isPresent
+                                  ? 'bg-white border-slate-200 hover:border-emerald-300'
+                                  : 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                              }`}
+                            >
+                              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                                <div className="min-w-0 flex items-center gap-3.5">
+                                  <img
+                                    src={swimmer.avatar || 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=150'}
+                                    alt={swimmer.name}
+                                    className="w-13 h-13 rounded-2xl object-cover border-2 border-slate-200 shadow-xs shrink-0"
+                                  />
+                                  <div className="min-w-0 space-y-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-bold text-slate-900 text-sm sm:text-base">{swimmer.name}</span>
+                                      <span className="font-mono text-xs text-sky-700 bg-sky-50 px-2 py-0.5 rounded-lg font-bold">{swimmer.code}</span>
+                                      <span className="text-[11px] font-bold text-teal-900 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-lg">
+                                        📅 {group.days} • ⏰ {group.time}
+                                      </span>
+                                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg">
+                                        📍 {swimmer.branch_name || MATROUH_BRANCHES[0]}
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                                      <span>ولي الأمر: <strong className="text-slate-700">{swimmer.parent_name || 'ولي الأمر'}</strong></span>
+                                      <span>•</span>
+                                      <a
+                                        href={formatWhatsAppUrl(swimmer.parent_phone, swimmer.name)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-mono text-[11px] font-bold transition-all"
+                                        title="اضغط لفتح واتساب ولي الأمر"
+                                      >
+                                        <MessageCircle className="w-3 h-3" />
+                                        <span>واتساب: {swimmer.parent_phone}</span>
+                                      </a>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleRollCallStatus(swimmer.id, 'present')}
+                                    className={`flex-1 sm:flex-none px-4 py-2 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                      isPresent
+                                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-500'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                                    }`}
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    <span>حاضر</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleRollCallStatus(swimmer.id, 'absent')}
+                                    className={`flex-1 sm:flex-none px-4 py-2 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                      !isPresent
+                                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-500'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
+                                    }`}
+                                  >
+                                    <XCircle className="w-4 h-4" />
+                                    <span>غائب</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-3 pt-3 border-t border-slate-100 text-xs">
+                                <div className="md:col-span-3">
+                                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                    مستوى جاهز بعد التمرينة:
+                                  </label>
+                                  <select
+                                    value={current.level}
+                                    onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
+                                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-slate-800"
+                                  >
+                                    {SWIMMER_LEVEL_PRESETS.map(lvl => (
+                                      <option key={lvl} value={lvl}>{lvl}</option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="md:col-span-4">
+                                  <label className="block text-[11px] font-bold text-teal-800 mb-1">
+                                    ✍️ أو اكتب مستوى اللاعب بعد تمرينة اليوم:
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="اكتب المستوى الذي وصل له اللاعب..."
+                                    value={current.level}
+                                    onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
+                                    className="w-full p-2 bg-teal-50/50 border border-teal-200 rounded-xl outline-none text-slate-900 font-bold"
+                                  />
+                                </div>
+
+                                <div className="md:col-span-5">
+                                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                    التقييم الفني وملاحظات التمرينة:
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="مثال: أتقن ضربات الرجلين لمسافة 25 متر..."
+                                    value={current.notes}
+                                    onChange={e => handleRollCallNoteChange(swimmer.id, e.target.value)}
+                                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-800 font-medium"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
+                  );
+                })}
 
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-4 pt-3 border-t border-slate-100 text-xs">
-                      <div className="md:col-span-3">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          اختيار مستوى جاهز بعد التمرينة:
-                        </label>
-                        <select
-                          value={current.level}
-                          onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-slate-800"
-                        >
-                          {SWIMMER_LEVEL_PRESETS.map(lvl => (
-                            <option key={lvl} value={lvl}>{lvl}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="md:col-span-4">
-                        <label className="block text-[11px] font-bold text-teal-800 mb-1">
-                          ✍️ أو اكتب مستوى اللاعب بعد تمرينة اليوم:
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="اكتب المستوى الذي وصل له اللاعب بعد التمرينة..."
-                          value={current.level}
-                          onChange={e => handleRollCallLevelChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-teal-50/50 border border-teal-200 rounded-xl outline-none text-slate-900 font-bold"
-                        />
-                      </div>
-
-                      <div className="md:col-span-5">
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          التقييم الفني وملاحظات التمرينة:
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="مثال: أتقن ضربات الرجلين لمسافة 25 متر ويحتاج تحسين النفس الجانبي..."
-                          value={current.notes}
-                          onChange={e => handleRollCallNoteChange(swimmer.id, e.target.value)}
-                          className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none text-slate-800 font-medium"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-            <div className="sticky bottom-4 z-20 pt-3">
-              <button
-                type="button"
-                onClick={handleSaveRollCallNotebook}
-                disabled={rollCallSaving}
-                className="w-full py-4 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white font-black rounded-3xl text-sm sm:text-base shadow-2xl shadow-teal-600/40 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                <span>
-                  {rollCallSaving
-                    ? 'جاري حفظ الكراسة...'
-                    : `حفظ وتأكيد كراسة الغياب والتقييم الفني ليوم (${rollCallDate})`}
-                </span>
-              </button>
-            </div>
+                <div className="sticky bottom-4 z-20 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSaveRollCallNotebook()}
+                    disabled={rollCallSaving}
+                    className="w-full py-4 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white font-black rounded-3xl text-sm sm:text-base shadow-2xl shadow-teal-600/40 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>
+                      {rollCallSaving
+                        ? 'جاري حفظ الكراسة...'
+                        : `حفظ وتأكيد كراسة غياب ومستويات كل مجاميع يوم ${rollCallDayName} (${rollCallDate})`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ==================== TAB 2: SUBSCRIPTION PLANS & BRANCHES SETTINGS ==================== */}
       {activeTab === 'subscription_settings' && (
@@ -1659,13 +2102,23 @@ export function HRDashboardView() {
             </div>
           </div>
 
-          {/* Partners & Staff Cards */}
+          {/* Partners & Staff Cards (Clickable to inspect all tasks of that person) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {staffList.map(staff => {
               const staffTasks = tasks.filter(t => t.assigned_to_user_id === staff.id);
               const pending = staffTasks.filter(t => t.status !== 'completed').length;
+              const isFiltered = taskFilterAssignee === staff.id;
               return (
-                <div key={staff.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-sky-300 transition-all">
+                <div
+                  key={staff.id}
+                  onClick={() => {
+                    setTaskFilterAssignee(staff.id);
+                    setInspectingStaffTasksUser(staff);
+                  }}
+                  className={`bg-white border-2 rounded-2xl p-4 shadow-sm hover:border-sky-500 hover:shadow-md transition-all cursor-pointer group ${
+                    isFiltered ? 'border-sky-500 ring-2 ring-sky-500/20' : 'border-slate-200'
+                  }`}
+                >
                   <div className="flex items-center gap-3">
                     <img
                       src={staff.avatar || 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'}
@@ -1673,7 +2126,9 @@ export function HRDashboardView() {
                       className="w-12 h-12 rounded-2xl object-cover border border-slate-200"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="font-bold text-slate-900 text-sm truncate">{staff.name}</div>
+                      <div className="font-bold text-slate-900 text-sm truncate group-hover:text-sky-600 transition-colors">
+                        {staff.name}
+                      </div>
                       <div className="text-[11px] text-slate-500 truncate">{staff.title}</div>
                       <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-1">
                         <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
@@ -1699,13 +2154,21 @@ export function HRDashboardView() {
 
                   <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-100 text-center">
                     <div className="bg-slate-50 p-2 rounded-xl">
-                      <div className="text-[10px] text-slate-500">سباحين تحت إشرافه</div>
-                      <div className="text-sm font-bold text-slate-800">{staff.total_swimmers_count || 0} سباح</div>
+                      <div className="text-[10px] text-slate-500">إجمالي مهامه</div>
+                      <div className="text-sm font-bold text-slate-800">{staffTasks.length} مهام</div>
                     </div>
                     <div className={`p-2 rounded-xl ${pending > 0 ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
                       <div className="text-[10px]">مهام قيد المتابعة</div>
                       <div className="text-sm font-bold">{pending} مهمة</div>
                     </div>
+                  </div>
+
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-sky-600 group-hover:text-sky-700">
+                    <span className="flex items-center gap-1.5">
+                      <Eye className="w-4 h-4" />
+                      <span>اضغط لعرض المهام المسندة إليه ({staffTasks.length})</span>
+                    </span>
+                    <span>←</span>
                   </div>
                 </div>
               );
@@ -1786,6 +2249,15 @@ export function HRDashboardView() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
+                        {task.status !== 'completed' && (
+                          <button
+                            onClick={() => handleUpdateTaskStatus(task.id, 'completed')}
+                            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                            title="تحديد المهمة كمكتملة"
+                          >
+                            ✓ تم الإنجاز
+                          </button>
+                        )}
                         <button
                           onClick={() => handleDeleteTask(task.id)}
                           className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
@@ -2081,7 +2553,7 @@ export function HRDashboardView() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                📅 مواعيد تمرين المجموعة (لإرسال مستوياتهم للمدرب ليلة التمرين) *
+                📅 أيام تمرين المجموعة (سبت وثلاثاء / أحد وأربعاء...) *
               </label>
               <select
                 value={swimmerForm.training_days}
@@ -2094,15 +2566,40 @@ export function HRDashboardView() {
               </select>
             </div>
             <div>
-              <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو إضافية</label>
-              <input
-                type="text"
-                value={swimmerForm.health_notes}
-                onChange={e => setSwimmerForm({ ...swimmerForm, health_notes: e.target.value })}
-                placeholder="أي ملاحظات صحية أو تفاصيل إضافية..."
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
-              />
+              <label className="block font-bold text-slate-700 mb-1">
+                ⏰ ساعة المجموعة (من 6 لـ 7 / من 7 لـ 8...) *
+              </label>
+              <select
+                value={swimmerForm.training_time}
+                onChange={e => setSwimmerForm({ ...swimmerForm, training_time: e.target.value })}
+                className="w-full p-2.5 bg-amber-50/80 border border-amber-200 rounded-xl outline-none font-bold text-amber-950"
+              >
+                {TRAINING_TIME_PRESETS.map(t => (
+                  <option key={t} value={t}>⏰ الساعة ({t})</option>
+                ))}
+                <option value="custom">✍️ كتابة ميعاد / ساعة مخصصة...</option>
+              </select>
+              {swimmerForm.training_time === 'custom' && (
+                <input
+                  type="text"
+                  value={swimmerForm.custom_training_time}
+                  onChange={e => setSwimmerForm({ ...swimmerForm, custom_training_time: e.target.value })}
+                  placeholder="مثال: من 3:30 إلى 4:30 م"
+                  className="w-full mt-2 p-2 bg-white border border-amber-300 rounded-xl outline-none font-bold"
+                />
+              )}
             </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ملاحظات طبية أو إضافية</label>
+            <input
+              type="text"
+              value={swimmerForm.health_notes}
+              onChange={e => setSwimmerForm({ ...swimmerForm, health_notes: e.target.value })}
+              placeholder="أي ملاحظات صحية أو تفاصيل إضافية..."
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none"
+            />
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
@@ -2572,6 +3069,151 @@ export function HRDashboardView() {
             </button>
           </div>
         </form>
+      </Modal>
+      {/* ==================== MODAL 6: INSPECT STAFF MEMBER'S TASKS ==================== */}
+      <Modal
+        isOpen={!!inspectingStaffTasksUser}
+        onClose={() => setInspectingStaffTasksUser(null)}
+        title={`المهام المسندة إلى: ${inspectingStaffTasksUser?.name || ''}`}
+      >
+        {inspectingStaffTasksUser && (
+          <div className="space-y-4 text-xs" dir="rtl">
+            <div className="p-4 bg-sky-50/80 border border-sky-100 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={inspectingStaffTasksUser.avatar || 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'}
+                  alt={inspectingStaffTasksUser.name}
+                  className="w-12 h-12 rounded-2xl object-cover border border-white shadow-xs"
+                />
+                <div>
+                  <div className="font-bold text-slate-900 text-sm">{inspectingStaffTasksUser.name}</div>
+                  <div className="text-[11px] text-slate-500">{inspectingStaffTasksUser.title}</div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setNewTaskForm({
+                    ...newTaskForm,
+                    assigned_to_user_id: inspectingStaffTasksUser.id,
+                  });
+                  setInspectingStaffTasksUser(null);
+                  setIsNewTaskModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl font-bold text-xs shadow-sm cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ إسناد مهمة جديدة له</span>
+              </button>
+            </div>
+
+            {(() => {
+              const memberTasks = tasks.filter(t => t.assigned_to_user_id === inspectingStaffTasksUser.id);
+              if (memberTasks.length === 0) {
+                return (
+                  <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 text-slate-500">
+                    لا توجد مهام مسندة إلى {inspectingStaffTasksUser.name} حالياً.
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+                  {memberTasks.map(task => {
+                    const statusLabel =
+                      task.status === 'completed'
+                        ? '✓ تم الإنجاز'
+                        : task.status === 'in_progress'
+                        ? '⏳ قيد التنفيذ'
+                        : '⚠️ معلقة لم تبدأ';
+                    const statusBg =
+                      task.status === 'completed'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : task.status === 'in_progress'
+                        ? 'bg-sky-50 text-sky-700 border-sky-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200';
+
+                    return (
+                      <div key={task.id} className="p-4 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${statusBg}`}>
+                              {statusLabel}
+                            </span>
+                            <span className="font-bold text-slate-900 text-xs sm:text-sm">{task.title}</span>
+                          </div>
+                          {task.due_date && (
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              الاستحقاق: {task.due_date}
+                            </span>
+                          )}
+                        </div>
+
+                        {task.description && (
+                          <p className="text-xs text-slate-600 leading-relaxed">{task.description}</p>
+                        )}
+
+                        {task.coach_notes && (
+                          <div className="p-2.5 bg-sky-50/70 border border-sky-100 rounded-xl text-xs text-sky-900">
+                            <span className="font-bold">ملاحظات التنفيذ من الكابتن: </span>
+                            <span>{task.coach_notes}</span>
+                          </div>
+                        )}
+
+                        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateTaskStatus(task.id, 'pending')}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                task.status === 'pending'
+                                  ? 'bg-amber-500 text-white'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-amber-50'
+                              }`}
+                            >
+                              معلقة
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateTaskStatus(task.id, 'in_progress')}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                task.status === 'in_progress'
+                                  ? 'bg-sky-600 text-white'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-sky-50'
+                              }`}
+                            >
+                              قيد التنفيذ
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateTaskStatus(task.id, 'completed')}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                                task.status === 'completed'
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-emerald-50'
+                              }`}
+                            >
+                              ✓ تم الإنجاز
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-rose-600 hover:bg-rose-50 rounded-lg text-[11px] font-bold cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </Modal>
     </div>
   );

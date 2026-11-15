@@ -331,6 +331,7 @@ export interface Swimmer {
   assigned_coach_name?: string;
   group_name?: string;
   training_days?: string;
+  training_time?: string;
   health_notes?: string;
   status: 'active' | 'inactive';
   created_at: string;
@@ -361,6 +362,7 @@ export interface CoachBriefingItem {
   last_status: 'present' | 'absent';
   evaluation_notes?: string;
   branch_name?: string;
+  training_time?: string;
 }
 
 export interface CoachBriefing {
@@ -368,6 +370,7 @@ export interface CoachBriefing {
   coach_id: string;
   coach_name: string;
   training_days: string;
+  training_time?: string;
   branch_name: string;
   source_session_date: string;
   briefing_night_label: string;

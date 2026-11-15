@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   BookOpen,
@@ -28,8 +28,21 @@ import { Task, StaffLog, Swimmer, CoachBriefing } from '@/lib/types';
 export function CoachDashboardView() {
   const { currentUser } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'roll_call' | 'my_tasks' | 'my_record'>('roll_call');
+  type CoachSectionTab = 'roll_call' | 'my_tasks' | 'my_record';
+  const [activeTab, setActiveTabState] = useState<CoachSectionTab>('roll_call');
+  const sectionHistoryRef = useRef<CoachSectionTab[]>(['roll_call']);
   const [loading, setLoading] = useState(false);
+
+  const setActiveTab = useCallback((nextTab: CoachSectionTab) => {
+    setActiveTabState((prev) => {
+      if (prev === nextTab) return prev;
+      sectionHistoryRef.current.push(nextTab);
+      if (typeof window !== 'undefined') {
+        window.history.pushState({ coachSection: nextTab }, '');
+      }
+      return nextTab;
+    });
+  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -42,7 +55,24 @@ export function CoachDashboardView() {
     };
     window.addEventListener('aquatrack:navigate-section', handler);
     return () => window.removeEventListener('aquatrack:navigate-section', handler);
-  }, []);
+  }, [setActiveTab]);
+
+  useEffect(() => {
+    const onBackGesture = (e: Event) => {
+      if (sectionHistoryRef.current.length > 1) {
+        e.preventDefault();
+        sectionHistoryRef.current.pop();
+        const prevSection = sectionHistoryRef.current[sectionHistoryRef.current.length - 1] || 'roll_call';
+        setActiveTabState(prevSection);
+      } else if (activeTab !== 'roll_call') {
+        e.preventDefault();
+        sectionHistoryRef.current = ['roll_call'];
+        setActiveTabState('roll_call');
+      }
+    };
+    window.addEventListener('aquatrack:back-gesture', onBackGesture);
+    return () => window.removeEventListener('aquatrack:back-gesture', onBackGesture);
+  }, [activeTab]);
 
   // --- 1. Pre-Workout Group Level Briefings (Sent automatically night before training) ---
   const [assignedSwimmers, setAssignedSwimmers] = useState<Swimmer[]>([]);
@@ -287,10 +317,10 @@ export function CoachDashboardView() {
               onChange={e => setSelectedDaysFilter(e.target.value)}
               className="bg-white border border-teal-200 rounded-xl px-3 py-2 text-xs font-bold text-teal-900 outline-none shrink-0"
             >
-              <option value="all">📅 جميع مجموعات التدريب</option>
+              <option value="all">📅 جميع المجاميع بالساعة</option>
               {briefings.map(b => (
-                <option key={b.id} value={b.training_days}>
-                  مجموعة {b.training_days}
+                <option key={b.id} value={b.id}>
+                  مجموعة {b.training_days} ({b.training_time || 'من 6 إلى 7 م'})
                 </option>
               ))}
             </select>
@@ -304,7 +334,7 @@ export function CoachDashboardView() {
           ) : (
             <div className="space-y-6">
               {briefings
-                .filter(b => selectedDaysFilter === 'all' || b.training_days === selectedDaysFilter)
+                .filter(b => selectedDaysFilter === 'all' || b.id === selectedDaysFilter || b.training_days === selectedDaysFilter)
                 .map(briefing => {
                   const groupSwimmers = briefing.swimmers || [];
                   return (
@@ -319,12 +349,17 @@ export function CoachDashboardView() {
                             <span className="px-2.5 py-0.5 rounded-full bg-teal-400/20 text-teal-300 border border-teal-400/30 text-[11px] font-bold">
                               📬 رسالة تحضير التمرينة القادمة
                             </span>
+                            {briefing.training_time && (
+                              <span className="px-2.5 py-0.5 rounded-full bg-sky-400/25 text-sky-200 border border-sky-400/30 text-[11px] font-black">
+                                ⏰ الساعة: {briefing.training_time}
+                              </span>
+                            )}
                             <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold">
-                              ⏰ {briefing.briefing_night_label}
+                              {briefing.briefing_night_label}
                             </span>
                           </div>
                           <h3 className="text-base sm:text-lg font-black text-white">
-                            مجموعة ({briefing.training_days}) — {briefing.next_session_label}
+                            {briefing.next_session_label}
                           </h3>
                           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
                             <span className="flex items-center gap-1">
