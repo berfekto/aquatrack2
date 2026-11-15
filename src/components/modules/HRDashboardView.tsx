@@ -46,6 +46,7 @@ import {
 } from 'lucide-react';
 import { Task, StaffLog, Swimmer, SwimmerLog, SubscriptionPlan } from '@/lib/types';
 import { Modal } from '@/components/ui/Modal';
+import { callUnifiedSync, loadLocalSyncBackup, SyncSnapshotResponse } from '@/lib/clientSync';
 
 function formatWhatsAppUrl(phone: string, swimmerName?: string): string {
   const digits = (phone || '').replace(/\D/g, '');
@@ -303,66 +304,19 @@ export function HRDashboardView() {
   });
   const [savingSession, setSavingSession] = useState(false);
 
-  // Fetch Subscription Plans
-  const loadSubscriptionPlans = useCallback(async () => {
-    try {
-      const res = await fetch('/api/subscription-plans');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.plans) {
-          setSubscriptionPlans(data.plans);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  // Fetch Tasks
-  const loadTasks = useCallback(async () => {
-    try {
-      const res = await fetch('/api/tasks');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) setTasks(data.tasks);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  // Fetch Staff Logs
-  const loadStaffLogs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/staff-logs');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) setStaffLogs(data.logs);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  // Fetch Swimmers
-  const loadSwimmers = useCallback(async () => {
-    try {
-      const res = await fetch('/api/swimmers');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          const list: Swimmer[] = data.swimmers;
-          setSwimmers(list);
-
-          const logsRes = await fetch(`/api/swimmer-logs?date=${rollCallDate}`);
-          let existingLogs: SwimmerLog[] = [];
-          if (logsRes.ok) {
-            const logsData = await logsRes.json();
-            if (logsData.success) existingLogs = logsData.logs;
-          }
+  const applySyncSnapshot = useCallback(
+    (snap: SyncSnapshotResponse | null, updateRollCallMap = false) => {
+      if (!snap) return;
+      if (snap.subscriptionPlans) setSubscriptionPlans(snap.subscriptionPlans);
+      if (snap.allTasks || snap.tasks) setTasks(snap.allTasks || snap.tasks);
+      if (snap.staffLogs) setStaffLogs(snap.staffLogs);
+      if (snap.swimmers) {
+        setSwimmers(snap.swimmers);
+        if (updateRollCallMap) {
+          const existingLogs = snap.dateSwimmerLogs || [];
           const existingMap = new Map(existingLogs.map(l => [l.swimmer_id, l]));
           const initialMap: Record<string, { status: 'present' | 'absent'; level: string; notes: string }> = {};
-          list.forEach(s => {
+          snap.swimmers.forEach(s => {
             const existing = existingMap.get(s.id);
             initialMap[s.id] = {
               status: existing ? existing.status : 'present',
@@ -373,10 +327,45 @@ export function HRDashboardView() {
           setRollCallState(initialMap);
         }
       }
-    } catch (e) {
-      console.error(e);
-    }
-  }, [rollCallDate]);
+    },
+    []
+  );
+
+  // Hydrate immediately from local backup on first render, then listen to live sync snapshots
+  useEffect(() => {
+    const local = loadLocalSyncBackup();
+    if (local.tasks.length > 0) setTasks(local.tasks);
+    if (local.swimmers.length > 0) setSwimmers(local.swimmers);
+    if (local.staffLogs.length > 0) setStaffLogs(local.staffLogs);
+    if (local.subscriptionPlans.length > 0) setSubscriptionPlans(local.subscriptionPlans);
+
+    const onSnapshot = (e: Event) => {
+      const snap = (e as CustomEvent<SyncSnapshotResponse>).detail;
+      applySyncSnapshot(snap, false);
+    };
+    window.addEventListener('aquatrack:sync-snapshot', onSnapshot);
+    return () => window.removeEventListener('aquatrack:sync-snapshot', onSnapshot);
+  }, [applySyncSnapshot]);
+
+  const loadSubscriptionPlans = useCallback(async () => {
+    const snap = await callUnifiedSync({ rollCallDate, role: currentUser?.role, userId: currentUser?.id });
+    applySyncSnapshot(snap, false);
+  }, [rollCallDate, currentUser?.role, currentUser?.id, applySyncSnapshot]);
+
+  const loadTasks = useCallback(async () => {
+    const snap = await callUnifiedSync({ rollCallDate, role: currentUser?.role, userId: currentUser?.id });
+    applySyncSnapshot(snap, false);
+  }, [rollCallDate, currentUser?.role, currentUser?.id, applySyncSnapshot]);
+
+  const loadStaffLogs = useCallback(async () => {
+    const snap = await callUnifiedSync({ rollCallDate, role: currentUser?.role, userId: currentUser?.id });
+    applySyncSnapshot(snap, false);
+  }, [rollCallDate, currentUser?.role, currentUser?.id, applySyncSnapshot]);
+
+  const loadSwimmers = useCallback(async () => {
+    const snap = await callUnifiedSync({ rollCallDate, role: currentUser?.role, userId: currentUser?.id });
+    applySyncSnapshot(snap, true);
+  }, [rollCallDate, currentUser?.role, currentUser?.id, applySyncSnapshot]);
 
   const handleToggleRollCallStatus = (swimmerId: string, status: 'present' | 'absent') => {
     setRollCallState(prev => ({
@@ -470,23 +459,24 @@ export function HRDashboardView() {
           evaluation_notes: finalNotes,
         };
       });
-      const res = await fetch('/api/swimmer-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'save-roll-call',
+        payload: {
           records,
           recorded_by_user_id: currentUser.id,
-        }),
+        },
+        rollCallDate,
+        role: currentUser.role,
+        userId: currentUser.id,
       });
-      const data = await res.json();
-      if (data.success) {
+      if (snap) {
+        applySyncSnapshot(snap, true);
         setRollCallSuccessMsg(
           groupTitleLabel
             ? `✅ تم حفظ غياب ومستويات (${groupTitleLabel}) ليوم ${rollCallDayName} (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات للمدرب!`
             : `✅ تم حفظ غياب ومستويات جميع مجاميع يوم ${rollCallDayName} (${rollCallDate}) بنجاح، وتم تجهيز رسالة المستويات التلقائية للمدرب ليلة التمرينة القادمة!`
         );
         setTimeout(() => setRollCallSuccessMsg(''), 7000);
-        await loadSwimmers();
       }
     } catch (e) {
       console.error(e);
@@ -497,15 +487,14 @@ export function HRDashboardView() {
 
   const refreshAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([
-      loadSubscriptionPlans(),
-      loadSwimmers(),
-      loadTasks(),
-      loadStaffLogs(),
-      refreshStaffList(),
-    ]);
+    const snap = await callUnifiedSync({
+      rollCallDate,
+      role: currentUser?.role,
+      userId: currentUser?.id,
+    });
+    applySyncSnapshot(snap, true);
     setLoading(false);
-  }, [loadSubscriptionPlans, loadSwimmers, loadTasks, loadStaffLogs, refreshStaffList]);
+  }, [rollCallDate, currentUser?.role, currentUser?.id, applySyncSnapshot]);
 
   useEffect(() => {
     refreshAll();
@@ -602,18 +591,18 @@ export function HRDashboardView() {
     };
 
     try {
-      const res = await fetch('/api/swimmers', {
-        method: editingSwimmerId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      const snap = await callUnifiedSync({
+        action: 'save-swimmer',
+        payload,
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      const data = await res.json();
-      if (data.success) {
+      if (snap) {
         setIsSwimmerModalOpen(false);
-        await loadSwimmers();
-        await refreshStaffList();
-        if (inspectingSwimmer && editingSwimmerId === inspectingSwimmer.id) {
-          setInspectingSwimmer(data.swimmer);
+        applySyncSnapshot(snap, true);
+        if (inspectingSwimmer && editingSwimmerId === inspectingSwimmer.id && snap.actionResult) {
+          setInspectingSwimmer(snap.actionResult);
         }
       }
     } catch (e) {
@@ -650,10 +639,9 @@ export function HRDashboardView() {
     if (!inspectingSwimmer) return;
     setSavingSession(true);
     try {
-      const res = await fetch('/api/swimmer-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'save-roll-call',
+        payload: {
           recorded_by_user_id: currentUser?.id || 'user-coach-1',
           records: [
             {
@@ -664,11 +652,13 @@ export function HRDashboardView() {
               evaluation_notes: sessionForm.evaluation_notes.trim(),
             },
           ],
-        }),
+        },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      const data = await res.json();
-      if (data.success) {
-        // Reload logs & swimmer list
+      if (snap) {
+        applySyncSnapshot(snap, true);
         const logsRes = await fetch(`/api/swimmer-logs?swimmerId=${inspectingSwimmer.id}`);
         if (logsRes.ok) {
           const logsData = await logsRes.json();
@@ -679,7 +669,6 @@ export function HRDashboardView() {
           level: sessionForm.level_at_time.trim() || inspectingSwimmer.level,
         });
         setSessionForm(prev => ({ ...prev, evaluation_notes: '' }));
-        await loadSwimmers();
       }
     } catch (e) {
       console.error(e);
@@ -693,19 +682,20 @@ export function HRDashboardView() {
     e.preventDefault();
     if (!newPlanForm.name.trim()) return;
     try {
-      const res = await fetch('/api/subscription-plans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'create-plan',
+        payload: {
           name: newPlanForm.name.trim(),
           price: parseFloat(newPlanForm.price) || 0,
           sessions_count: parseInt(newPlanForm.sessions_count, 10) || 8,
           duration_days: parseInt(newPlanForm.duration_days, 10) || 30,
           description: newPlanForm.description.trim(),
-        }),
+        },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      const data = await res.json();
-      if (data.success) {
+      if (snap) {
         setNewPlanForm({
           name: '',
           price: '',
@@ -713,7 +703,7 @@ export function HRDashboardView() {
           duration_days: '30',
           description: '',
         });
-        await loadSubscriptionPlans();
+        applySyncSnapshot(snap, false);
       }
     } catch (e) {
       console.error(e);
@@ -723,8 +713,14 @@ export function HRDashboardView() {
   const handleDeleteSubscriptionPlan = async (id: string) => {
     if (!confirm('هل تريد حذف نوع الاشتراك هذا من الإعدادات؟')) return;
     try {
-      const res = await fetch(`/api/subscription-plans?id=${id}`, { method: 'DELETE' });
-      if (res.ok) await loadSubscriptionPlans();
+      const snap = await callUnifiedSync({
+        action: 'delete-plan',
+        payload: { id },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
+      });
+      applySyncSnapshot(snap, false);
     } catch (e) {
       console.error(e);
     }
@@ -736,16 +732,17 @@ export function HRDashboardView() {
     if (!newTaskForm.title.trim() || !newTaskForm.assigned_to_user_id) return;
 
     try {
-      const res = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'create-task',
+        payload: {
           ...newTaskForm,
           created_by_user_id: currentUser?.id || 'user-hr',
-        }),
+        },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      const data = await res.json();
-      if (data.success) {
+      if (snap) {
         setIsNewTaskModalOpen(false);
         setNewTaskForm({
           title: '',
@@ -754,7 +751,7 @@ export function HRDashboardView() {
           assigned_to_user_id: 'user-coach-1',
           due_date: new Date().toISOString().split('T')[0],
         });
-        loadTasks();
+        applySyncSnapshot(snap, false);
       }
     } catch (e) {
       console.error(e);
@@ -764,11 +761,14 @@ export function HRDashboardView() {
   const handleDeleteTask = async (id: string) => {
     if (!confirm('هل أنت متأكد من حذف هذه المهمة؟')) return;
     try {
-      const res = await fetch(`/api/tasks?id=${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        await loadTasks();
-        await refreshStaffList();
-      }
+      const snap = await callUnifiedSync({
+        action: 'delete-task',
+        payload: { id },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
+      });
+      applySyncSnapshot(snap, false);
     } catch (e) {
       console.error(e);
     }
@@ -776,15 +776,14 @@ export function HRDashboardView() {
 
   const handleUpdateTaskStatus = async (taskId: string, status: 'pending' | 'in_progress' | 'completed') => {
     try {
-      const res = await fetch('/api/tasks', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: taskId, status }),
+      const snap = await callUnifiedSync({
+        action: 'update-task',
+        payload: { id: taskId, status },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      if (res.ok) {
-        await loadTasks();
-        await refreshStaffList();
-      }
+      applySyncSnapshot(snap, false);
     } catch (e) {
       console.error(e);
     }
@@ -819,22 +818,21 @@ export function HRDashboardView() {
   // Handle Mark Staff Attendance
   const handleMarkStaffAttendance = async (userId: string, status: 'present' | 'late' | 'absent') => {
     try {
-      const res = await fetch('/api/staff-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'create-staff-log',
+        payload: {
           user_id: userId,
           date: selectedLogDate,
           type: 'attendance',
           status,
           amount: 0,
           logged_by_user_id: currentUser?.id || 'user-hr',
-        }),
+        },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      if (res.ok) {
-        loadStaffLogs();
-        refreshStaffList();
-      }
+      applySyncSnapshot(snap, false);
     } catch (e) {
       console.error(e);
     }
@@ -846,18 +844,19 @@ export function HRDashboardView() {
     if (!newPenaltyForm.user_id || !newPenaltyForm.reason.trim()) return;
 
     try {
-      const res = await fetch('/api/staff-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'create-staff-log',
+        payload: {
           ...newPenaltyForm,
           amount: parseFloat(newPenaltyForm.amount) || 0,
           date: selectedLogDate,
           logged_by_user_id: currentUser?.id || 'user-hr',
-        }),
+        },
+        rollCallDate,
+        role: currentUser?.role,
+        userId: currentUser?.id,
       });
-      const data = await res.json();
-      if (data.success) {
+      if (snap) {
         setIsNewPenaltyModalOpen(false);
         setNewPenaltyForm({
           user_id: 'user-coach-1',
@@ -865,7 +864,7 @@ export function HRDashboardView() {
           amount: '',
           reason: '',
         });
-        loadStaffLogs();
+        applySyncSnapshot(snap, false);
       }
     } catch (e) {
       console.error(e);

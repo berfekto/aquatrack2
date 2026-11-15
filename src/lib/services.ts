@@ -2255,3 +2255,221 @@ export function registerStaffUser(data: {
 
   return getUserById(id)!;
 }
+
+// --- UNIFIED SERVERLESS SYNC & REHYDRATION ENGINE ---
+export function rehydrateAndGetSyncSnapshot(input?: {
+  rollCallDate?: string;
+  coachId?: string;
+  role?: string;
+  userId?: string;
+  clientBackup?: {
+    tasks?: Task[];
+    deletedTaskIds?: string[];
+    swimmers?: Swimmer[];
+    deletedSwimmerIds?: string[];
+    swimmerLogs?: SwimmerLog[];
+    staffLogs?: StaffLog[];
+    subscriptionPlans?: SubscriptionPlan[];
+  };
+}) {
+  const backup = input?.clientBackup;
+  if (backup) {
+    const applyRehydration = db.transaction(() => {
+      if (Array.isArray(backup.deletedTaskIds)) {
+        const delTask = db.prepare('DELETE FROM tasks WHERE id = ?');
+        backup.deletedTaskIds.forEach(id => {
+          try { delTask.run(id); } catch {}
+        });
+      }
+      if (Array.isArray(backup.deletedSwimmerIds)) {
+        const delSwim = db.prepare('DELETE FROM swimmers WHERE id = ?');
+        backup.deletedSwimmerIds.forEach(id => {
+          try { delSwim.run(id); } catch {}
+        });
+      }
+
+      if (Array.isArray(backup.subscriptionPlans) && backup.subscriptionPlans.length > 0) {
+        const upsertPlan = db.prepare(`
+          INSERT INTO subscription_plans (id, name, price, sessions_count, duration_days, description, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            price = excluded.price,
+            sessions_count = excluded.sessions_count,
+            duration_days = excluded.duration_days,
+            description = excluded.description
+        `);
+        for (const p of backup.subscriptionPlans) {
+          if (!p?.id || !p?.name) continue;
+          try {
+            upsertPlan.run(p.id, p.name, p.price || 0, p.sessions_count || 8, p.duration_days || 30, p.description || '', p.created_at || new Date().toISOString());
+          } catch {}
+        }
+      }
+
+      if (Array.isArray(backup.swimmers) && backup.swimmers.length > 0) {
+        const upsertSwimmer = db.prepare(`
+          INSERT INTO swimmers (
+            id, name, code, birth_date, gender, parent_name, parent_phone, emergency_phone,
+            level, subscription_type, branch_name, avatar,
+            assigned_coach_id, assigned_coach_name, group_name, training_days, training_time, health_notes, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            level = excluded.level,
+            subscription_type = excluded.subscription_type,
+            branch_name = excluded.branch_name,
+            avatar = CASE WHEN excluded.avatar != '' THEN excluded.avatar ELSE swimmers.avatar END,
+            assigned_coach_id = excluded.assigned_coach_id,
+            assigned_coach_name = excluded.assigned_coach_name,
+            parent_name = excluded.parent_name,
+            parent_phone = excluded.parent_phone,
+            group_name = excluded.group_name,
+            training_days = excluded.training_days,
+            training_time = excluded.training_time,
+            health_notes = excluded.health_notes
+        `);
+        for (const s of backup.swimmers) {
+          if (!s?.id || !s?.name) continue;
+          try {
+            upsertSwimmer.run(
+              s.id,
+              s.name,
+              s.code || `SW-${Math.floor(100 + Math.random() * 900)}`,
+              s.birth_date || '',
+              s.gender || 'male',
+              s.parent_name || '',
+              s.parent_phone || '',
+              s.emergency_phone || '',
+              s.level || 'المستوى 1: كسر حاجز الخوف والطفو',
+              s.subscription_type || 'اشتراك شهري تأسيسي (8 حصص)',
+              s.branch_name || 'فندق السلام للقوات المسلحة - مطروح',
+              s.avatar || '',
+              s.assigned_coach_id || 'user-coach-1',
+              s.assigned_coach_name || 'كابتن أسامة هيثم مصطفى',
+              s.group_name || '',
+              s.training_days || 'السبت والثلاثاء',
+              s.training_time || 'من 6 إلى 7 م',
+              s.health_notes || '',
+              s.status || 'active',
+              s.created_at || new Date().toISOString()
+            );
+          } catch {}
+        }
+      }
+
+      if (Array.isArray(backup.tasks) && backup.tasks.length > 0) {
+        const upsertTask = db.prepare(`
+          INSERT INTO tasks (
+            id, title, description, priority, status,
+            assigned_to_user_id, assigned_to_name,
+            created_by_user_id, created_by_name,
+            due_date, coach_notes, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            status = CASE WHEN excluded.updated_at >= tasks.updated_at THEN excluded.status ELSE tasks.status END,
+            coach_notes = CASE WHEN excluded.updated_at >= tasks.updated_at THEN excluded.coach_notes ELSE tasks.coach_notes END,
+            updated_at = CASE WHEN excluded.updated_at >= tasks.updated_at THEN excluded.updated_at ELSE tasks.updated_at END
+        `);
+        for (const t of backup.tasks) {
+          if (!t?.id || !t?.title) continue;
+          try {
+            upsertTask.run(
+              t.id,
+              t.title,
+              t.description || '',
+              t.priority || 'normal',
+              t.status || 'pending',
+              t.assigned_to_user_id || 'user-coach-1',
+              t.assigned_to_name || 'كابتن أسامة هيثم مصطفى',
+              t.created_by_user_id || 'user-hr',
+              t.created_by_name || 'يوسف سمير مصطفى',
+              t.due_date || '',
+              t.coach_notes || '',
+              t.created_at || new Date().toISOString(),
+              t.updated_at || new Date().toISOString()
+            );
+          } catch {}
+        }
+      }
+
+      if (Array.isArray(backup.swimmerLogs) && backup.swimmerLogs.length > 0) {
+        const upsertLog = db.prepare(`
+          INSERT INTO swimmer_logs (
+            id, swimmer_id, swimmer_name, date, status, level_at_time, evaluation_notes, recorded_by_user_id, recorded_by_name, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            level_at_time = excluded.level_at_time,
+            evaluation_notes = excluded.evaluation_notes
+        `);
+        for (const l of backup.swimmerLogs) {
+          if (!l?.id || !l?.swimmer_id) continue;
+          try {
+            upsertLog.run(
+              l.id,
+              l.swimmer_id,
+              l.swimmer_name || '',
+              l.date,
+              l.status || 'present',
+              l.level_at_time || '',
+              l.evaluation_notes || '',
+              l.recorded_by_user_id || 'user-hr',
+              l.recorded_by_name || 'يوسف سمير مصطفى',
+              l.created_at || new Date().toISOString()
+            );
+          } catch {}
+        }
+      }
+
+      if (Array.isArray(backup.staffLogs) && backup.staffLogs.length > 0) {
+        const upsertStaffLog = db.prepare(`
+          INSERT INTO staff_logs (
+            id, user_id, user_name, date, type, status, amount, reason, logged_by_user_id, logged_by_name, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            status = excluded.status,
+            amount = excluded.amount,
+            reason = excluded.reason
+        `);
+        for (const sl of backup.staffLogs) {
+          if (!sl?.id || !sl?.user_id) continue;
+          try {
+            upsertStaffLog.run(
+              sl.id,
+              sl.user_id,
+              sl.user_name || '',
+              sl.date,
+              sl.type || 'attendance',
+              sl.status || 'present',
+              sl.amount || 0,
+              sl.reason || '',
+              sl.logged_by_user_id || 'user-hr',
+              sl.logged_by_name || 'يوسف سمير مصطفى',
+              sl.created_at || new Date().toISOString()
+            );
+          } catch {}
+        }
+      }
+    });
+
+    try {
+      applyRehydration();
+      syncCoachBriefingsForGroups();
+    } catch (e) {
+      console.error('Rehydration error:', e);
+    }
+  }
+
+  return {
+    tasks: getTasks(input?.coachId ? { assignedToUserId: input.coachId } : undefined),
+    allTasks: getTasks(),
+    swimmers: getSwimmers(),
+    staffLogs: getStaffLogs(),
+    subscriptionPlans: getSubscriptionPlans(),
+    staffList: getStaffUsers(),
+    briefings: getCoachBriefings(input?.coachId),
+    dateSwimmerLogs: input?.rollCallDate ? getSwimmerLogs({ date: input.rollCallDate }) : [],
+    notifications: getNotifications(input?.role, input?.userId),
+  };
+}

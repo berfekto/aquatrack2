@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, Academy, AppNotification, DashboardStats, User } from '@/lib/types';
+import { callUnifiedSync, SyncSnapshotResponse } from '@/lib/clientSync';
 
 interface StaffUserItem extends User {
   pending_tasks_count?: number;
@@ -151,32 +152,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Fetch staff list for assignment & sync current user profile
+  const applyStaffSnapshot = useCallback((staffData: StaffUserItem[]) => {
+    setStaffList(staffData);
+    setCurrentUser(prev => {
+      if (!prev) return null;
+      const latest = staffData.find(u => u.id === prev.id);
+      if (latest) {
+        const merged = { ...prev, name: latest.name, title: latest.title, avatar: latest.avatar, phone: latest.phone, email: latest.email };
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        } catch {}
+        return merged;
+      }
+      return prev;
+    });
+  }, []);
+
+  // Fetch staff list for assignment & sync current user profile via unified /api/sync
   const refreshStaffList = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth?staff_only=true');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.staff) {
-          setStaffList(data.staff);
-          setCurrentUser(prev => {
-            if (!prev) return null;
-            const latest = (data.staff as StaffUserItem[]).find(u => u.id === prev.id);
-            if (latest) {
-              const merged = { ...prev, name: latest.name, title: latest.title, avatar: latest.avatar, phone: latest.phone, email: latest.email };
-              try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-              } catch {}
-              return merged;
-            }
-            return prev;
-          });
-        }
+      const snap = await callUnifiedSync();
+      if (snap && Array.isArray(snap.staffList)) {
+        applyStaffSnapshot(snap.staffList);
       }
     } catch (e) {
       console.error('Failed to fetch staff list:', e);
     }
-  }, []);
+  }, [applyStaffSnapshot]);
 
   // Restore authenticated session from localStorage on startup
   useEffect(() => {
@@ -427,63 +429,67 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [playNotificationSound]);
 
+  const processIncomingNotifications = useCallback((list: AppNotification[]) => {
+    if (!currentUser || !Array.isArray(list)) return;
+    const storageKey = `aquatrack_seen_notifs_${currentUser.id}`;
+    if (isFirstNotifFetchRef.current) {
+      isFirstNotifFetchRef.current = false;
+      try {
+        const saved = localStorage.getItem(storageKey);
+        if (saved) {
+          const parsedIds: string[] = JSON.parse(saved);
+          parsedIds.forEach(id => seenNotifIdsRef.current.add(id));
+        } else {
+          list.forEach(n => seenNotifIdsRef.current.add(n.id));
+        }
+      } catch {
+        list.forEach(n => seenNotifIdsRef.current.add(n.id));
+      }
+    }
+
+    const newlyArrived = list.filter(n => !seenNotifIdsRef.current.has(n.id) && n.is_read === 0);
+    if (newlyArrived.length > 0) {
+      newlyArrived.forEach(n => seenNotifIdsRef.current.add(n.id));
+      triggerDeviceNotification(newlyArrived[0]);
+    }
+
+    list.forEach(n => seenNotifIdsRef.current.add(n.id));
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(Array.from(seenNotifIdsRef.current).slice(-100)));
+    } catch {}
+
+    setNotifications(list);
+  }, [currentUser, triggerDeviceNotification]);
+
+  useEffect(() => {
+    const onSnapshot = (e: Event) => {
+      const snap = (e as CustomEvent<SyncSnapshotResponse>).detail;
+      if (!snap) return;
+      if (Array.isArray(snap.staffList)) {
+        applyStaffSnapshot(snap.staffList);
+      }
+      if (Array.isArray(snap.notifications)) {
+        processIncomingNotifications(snap.notifications);
+      }
+    };
+    window.addEventListener('aquatrack:sync-snapshot', onSnapshot);
+    return () => window.removeEventListener('aquatrack:sync-snapshot', onSnapshot);
+  }, [applyStaffSnapshot, processIncomingNotifications]);
+
   const pollNotifications = useCallback(async () => {
     if (!currentUser) return;
     try {
-      const notifRes = await fetch(`/api/notifications?role=${currentRole}&userId=${currentUser.id}`, {
-        cache: 'no-store',
+      await callUnifiedSync({
+        role: currentRole,
+        userId: currentUser.id,
+        coachId: currentUser.role === 'coach' || currentUser.role === 'assistant' ? currentUser.id : undefined,
       });
-      if (!notifRes.ok) return;
-      const list = (await notifRes.json()) as AppNotification[];
-      if (!Array.isArray(list)) return;
-
-      const storageKey = `aquatrack_seen_notifs_${currentUser.id}`;
-      if (isFirstNotifFetchRef.current) {
-        isFirstNotifFetchRef.current = false;
-        try {
-          const saved = localStorage.getItem(storageKey);
-          if (saved) {
-            const parsedIds: string[] = JSON.parse(saved);
-            parsedIds.forEach(id => seenNotifIdsRef.current.add(id));
-          } else {
-            // First time on this device: mark existing read notifications as seen, but alert on newest unread if recent
-            list.forEach(n => seenNotifIdsRef.current.add(n.id));
-          }
-        } catch {
-          list.forEach(n => seenNotifIdsRef.current.add(n.id));
-        }
-      }
-
-      const newlyArrived = list.filter(n => !seenNotifIdsRef.current.has(n.id) && n.is_read === 0);
-      if (newlyArrived.length > 0) {
-        newlyArrived.forEach(n => seenNotifIdsRef.current.add(n.id));
-        triggerDeviceNotification(newlyArrived[0]);
-      }
-
-      list.forEach(n => seenNotifIdsRef.current.add(n.id));
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(Array.from(seenNotifIdsRef.current).slice(-100)));
-      } catch {}
-
-      setNotifications(list);
     } catch {}
-  }, [currentUser, currentRole, triggerDeviceNotification]);
+  }, [currentUser, currentRole]);
 
   const refreshData = async () => {
     try {
-      const acadRes = await fetch('/api/academies');
-      if (acadRes.ok) {
-        const data = await acadRes.json();
-        setAcademies(data.academies || []);
-      }
-
       await pollNotifications();
-
-      const statsRes = await fetch(`/api/dashboard?academyId=${currentAcademyId}`);
-      if (statsRes.ok) {
-        const data = await statsRes.json();
-        setStats(data);
-      }
     } catch (err) {
       console.error('Error fetching data:', err);
     }
@@ -497,22 +503,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission().catch(() => {});
       }
-      // Live online polling every 5 seconds so tasks & tomorrow's training briefings arrive immediately
+      // Live online polling every 4 seconds via unified /api/sync
       const interval = setInterval(() => {
         pollNotifications();
-      }, 5000);
+      }, 4000);
       return () => clearInterval(interval);
     }
   }, [currentRole, currentAcademyId, currentUser, pollNotifications]);
 
   const markNotificationRead = async (id: string) => {
     try {
-      await fetch('/api/notifications', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
       setNotifications(prev => prev.map(n => (n.id === id ? { ...n, is_read: 1 } : n)));
+      await callUnifiedSync({
+        action: 'mark-notification-read',
+        payload: { id },
+        role: currentRole,
+        userId: currentUser?.id,
+      });
     } catch (err) {
       console.error('Error marking notification read:', err);
     }

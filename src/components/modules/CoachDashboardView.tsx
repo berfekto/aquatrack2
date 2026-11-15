@@ -24,6 +24,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { Task, StaffLog, Swimmer, CoachBriefing } from '@/lib/types';
+import { callUnifiedSync, loadLocalSyncBackup, SyncSnapshotResponse } from '@/lib/clientSync';
 
 export function CoachDashboardView() {
   const { currentUser } = useApp();
@@ -86,73 +87,74 @@ export function CoachDashboardView() {
   // --- 3. My HR Record State ---
   const [myStaffLogs, setMyStaffLogs] = useState<StaffLog[]>([]);
 
-  // Load Assigned Swimmers & Night-Before Level Briefings
-  const loadAssignedSwimmers = useCallback(async () => {
+  const applyCoachSnapshot = useCallback(
+    (snap: SyncSnapshotResponse | null) => {
+      if (!snap || !currentUser) return;
+      if (snap.swimmers) {
+        const list =
+          currentUser.role === 'coach' || currentUser.role === 'assistant'
+            ? snap.swimmers.filter(s => s.assigned_coach_id === currentUser.id)
+            : snap.swimmers;
+        setAssignedSwimmers(list);
+      }
+      if (snap.briefings) {
+        setBriefings(snap.briefings);
+      }
+      const allTasks = snap.allTasks || snap.tasks || [];
+      const mine = allTasks.filter(t => t.assigned_to_user_id === currentUser.id);
+      setMyTasks(mine);
+      setEditingTaskNotes(prev => {
+        const next = { ...prev };
+        mine.forEach((t: Task) => {
+          if (next[t.id] === undefined) {
+            next[t.id] = t.coach_notes || '';
+          }
+        });
+        return next;
+      });
+      if (snap.staffLogs) {
+        setMyStaffLogs(snap.staffLogs.filter(l => l.user_id === currentUser.id));
+      }
+    },
+    [currentUser]
+  );
+
+  useEffect(() => {
     if (!currentUser) return;
-    try {
-      const queryParam =
+    const local = loadLocalSyncBackup();
+    if (local.tasks.length > 0) {
+      setMyTasks(local.tasks.filter(t => t.assigned_to_user_id === currentUser.id));
+    }
+    if (local.swimmers.length > 0) {
+      setAssignedSwimmers(
         currentUser.role === 'coach' || currentUser.role === 'assistant'
-          ? `?coachId=${currentUser.id}`
-          : '';
-      const [swimmersRes, logsRes] = await Promise.all([
-        fetch(`/api/swimmers${queryParam}`),
-        fetch(`/api/swimmer-logs${queryParam}`),
-      ]);
-      if (swimmersRes.ok) {
-        const data = await swimmersRes.json();
-        if (data.success) setAssignedSwimmers(data.swimmers || []);
-      }
-      if (logsRes.ok) {
-        const logsData = await logsRes.json();
-        if (logsData.success && logsData.briefings) {
-          setBriefings(logsData.briefings);
-        }
-      }
-    } catch (e) {
-      console.error(e);
+          ? local.swimmers.filter(s => s.assigned_coach_id === currentUser.id)
+          : local.swimmers
+      );
     }
-  }, [currentUser]);
+    if (local.staffLogs.length > 0) {
+      setMyStaffLogs(local.staffLogs.filter(l => l.user_id === currentUser.id));
+    }
 
-  // Load My Tasks
-  const loadMyTasks = useCallback(async () => {
-    if (!currentUser) return;
-    try {
-      const res = await fetch(`/api/tasks?assigned_to=${currentUser.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          setMyTasks(data.tasks);
-          const notesMap: Record<string, string> = {};
-          data.tasks.forEach((t: Task) => {
-            notesMap[t.id] = t.coach_notes || '';
-          });
-          setEditingTaskNotes(notesMap);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, [currentUser]);
-
-  // Load My HR Record
-  const loadMyStaffLogs = useCallback(async () => {
-    if (!currentUser) return;
-    try {
-      const res = await fetch(`/api/staff-logs?userId=${currentUser.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) setMyStaffLogs(data.logs);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, [currentUser]);
+    const onSnapshot = (e: Event) => {
+      const snap = (e as CustomEvent<SyncSnapshotResponse>).detail;
+      applyCoachSnapshot(snap);
+    };
+    window.addEventListener('aquatrack:sync-snapshot', onSnapshot);
+    return () => window.removeEventListener('aquatrack:sync-snapshot', onSnapshot);
+  }, [currentUser, applyCoachSnapshot]);
 
   const refreshAll = useCallback(async () => {
+    if (!currentUser) return;
     setLoading(true);
-    await Promise.all([loadAssignedSwimmers(), loadMyTasks(), loadMyStaffLogs()]);
+    const snap = await callUnifiedSync({
+      coachId: currentUser.role === 'coach' || currentUser.role === 'assistant' ? currentUser.id : undefined,
+      role: currentUser.role,
+      userId: currentUser.id,
+    });
+    applyCoachSnapshot(snap);
     setLoading(false);
-  }, [loadAssignedSwimmers, loadMyTasks, loadMyStaffLogs]);
+  }, [currentUser, applyCoachSnapshot]);
 
   useEffect(() => {
     refreshAll();
@@ -160,21 +162,21 @@ export function CoachDashboardView() {
 
   // Handle Update Task Status
   const handleUpdateTaskStatus = async (taskId: string, status: 'pending' | 'in_progress' | 'completed') => {
+    if (!currentUser) return;
     try {
       const notes = editingTaskNotes[taskId] || '';
-      const res = await fetch('/api/tasks', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const snap = await callUnifiedSync({
+        action: 'update-task',
+        payload: {
           id: taskId,
           status,
           coach_notes: notes,
-        }),
+        },
+        coachId: currentUser.role === 'coach' || currentUser.role === 'assistant' ? currentUser.id : undefined,
+        role: currentUser.role,
+        userId: currentUser.id,
       });
-      const data = await res.json();
-      if (data.success) {
-        loadMyTasks();
-      }
+      applyCoachSnapshot(snap);
     } catch (e) {
       console.error(e);
     }

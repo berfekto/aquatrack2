@@ -39,7 +39,8 @@ export async function POST(req: NextRequest) {
       due_date: due_date || undefined,
     });
 
-    return NextResponse.json({ success: true, task });
+    const allTasks = getTasks();
+    return NextResponse.json({ success: true, task, tasks: allTasks });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -62,7 +63,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'المهمة غير موجودة' }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, task: updatedTask });
+    const allTasks = getTasks();
+    return NextResponse.json({ success: true, task: updatedTask, tasks: allTasks });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
@@ -83,7 +85,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     const success = deleteTask(id);
-    return NextResponse.json({ success });
+    const allTasks = getTasks();
+    return NextResponse.json({ success, tasks: allTasks });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
