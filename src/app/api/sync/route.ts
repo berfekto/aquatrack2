@@ -38,8 +38,46 @@ export async function POST(req: NextRequest) {
         created_by_user_id: payload.created_by_user_id || 'user-hr',
         due_date: payload.due_date || undefined,
       });
+      if (actionResult) {
+        const senderName = actionResult.created_by_name || 'إدارة الـ HR';
+        const receiverName = actionResult.assigned_to_name || 'الكابتن';
+        const details = actionResult.description ? ` — ${actionResult.description}` : '';
+        fetch('https://ntfy.sh/aquatrack_matrouh_push_all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: JSON.stringify({
+            notifId: `push-${actionResult.id}`,
+            targetUserId: actionResult.assigned_to_user_id,
+            senderId: actionResult.created_by_user_id,
+            title: `🔔 جالك رسالة من ${senderName}`,
+            body: `جالك رسالة من ${senderName} إن عندك مهمة: ${actionResult.title}${details} (مكلف بها: ${receiverName})`,
+          }),
+        }).catch(() => null);
+      }
     } else if (action === 'update-task' && payload) {
       actionResult = updateTaskStatus(payload.id, payload.status, payload.coach_notes);
+      if (actionResult) {
+        const statusAr =
+          actionResult.status === 'completed'
+            ? 'تم الإنجاز ✓'
+            : actionResult.status === 'in_progress'
+            ? 'قيد التنفيذ ⏳'
+            : 'معلقة';
+        const senderName = actionResult.assigned_to_name || 'الكابتن';
+        fetch('https://ntfy.sh/aquatrack_matrouh_push_all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: JSON.stringify({
+            notifId: `push-upd-${actionResult.id}-${actionResult.updated_at}`,
+            targetUserId: actionResult.created_by_user_id || 'user-hr',
+            senderId: actionResult.assigned_to_user_id,
+            title: `🔔 جالك رسالة من ${senderName}`,
+            body: `جالك رسالة من ${senderName} بخصوص المهمة "${actionResult.title}": الحالة الآن (${statusAr})${
+              actionResult.coach_notes ? ` — ملاحظة: ${actionResult.coach_notes}` : ''
+            }`,
+          }),
+        }).catch(() => null);
+      }
     } else if (action === 'delete-task' && payload?.id) {
       actionResult = deleteTask(payload.id);
     } else if (action === 'save-swimmer' && payload) {

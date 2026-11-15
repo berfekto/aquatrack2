@@ -39,6 +39,23 @@ export async function POST(req: NextRequest) {
       due_date: due_date || undefined,
     });
 
+    if (task) {
+      const senderName = task.created_by_name || 'إدارة الـ HR';
+      const receiverName = task.assigned_to_name || 'الكابتن';
+      const details = task.description ? ` — ${task.description}` : '';
+      fetch('https://ntfy.sh/aquatrack_matrouh_push_all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: JSON.stringify({
+          notifId: `push-${task.id}`,
+          targetUserId: task.assigned_to_user_id,
+          senderId: task.created_by_user_id,
+          title: `🔔 جالك رسالة من ${senderName}`,
+          body: `جالك رسالة من ${senderName} إن عندك مهمة: ${task.title}${details} (مكلف بها: ${receiverName})`,
+        }),
+      }).catch(() => null);
+    }
+
     const allTasks = getTasks();
     return NextResponse.json({ success: true, task, tasks: allTasks });
   } catch (error: any) {

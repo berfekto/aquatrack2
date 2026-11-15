@@ -1603,11 +1603,14 @@ export function createTask(data: {
   );
 
   // Send instant online notification to the assigned staff member / coach
+  const senderName = createdUser?.name || 'إدارة الـ HR';
+  const receiverName = assignedUser?.name || 'الكابتن';
+  const detailsText = data.description ? ` — ${data.description}` : '';
   createNotification({
     target_role: assignedUser?.role || 'coach',
     target_user_id: data.assigned_to_user_id,
-    title: `📋 مهمة جديدة من ${createdUser?.name || 'الـ HR'}: ${data.title}`,
-    message: `${data.description ? data.description + ' — ' : ''}مطلوب تنفيذها (الاستحقاق: ${data.due_date || 'اليوم'})`,
+    title: `🔔 جالك رسالة من ${senderName}`,
+    message: `جالك رسالة من ${senderName} إن عندك مهمة: ${data.title}${detailsText} (مكلف بها: ${receiverName})`,
     type: 'alert',
     link: 'coach_dashboard',
   });
@@ -1641,11 +1644,12 @@ export function updateTaskStatus(
 
   if (updated) {
     const statusAr = status === 'completed' ? 'تم الإنجاز ✓' : status === 'in_progress' ? 'قيد التنفيذ ⏳' : 'معلقة';
+    const senderName = updated.assigned_to_name || 'الكابتن';
     createNotification({
       target_role: 'hr',
       target_user_id: updated.created_by_user_id,
-      title: `✅ تحديث مهمة من ${updated.assigned_to_name || 'الكابتن'}`,
-      message: `المهمة "${updated.title}" أصبحت (${statusAr})${coach_notes ? ` — ملاحظة: ${coach_notes}` : ''}`,
+      title: `🔔 جالك رسالة من ${senderName}`,
+      message: `جالك رسالة من ${senderName} بخصوص المهمة "${updated.title}": الحالة الآن (${statusAr})${coach_notes ? ` — ملاحظة: ${coach_notes}` : ''}`,
       type: 'info',
       link: 'hr_dashboard',
     });

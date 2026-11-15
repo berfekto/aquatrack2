@@ -140,6 +140,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCurrentAcademyId(user.academy_id || 'all');
     setCoachId(user.id);
 
+    try {
+      const nativeBridge = (window as any).AquaTrackNative;
+      if (nativeBridge && typeof nativeBridge.setLoggedInUser === 'function') {
+        nativeBridge.setLoggedInUser(user.id, user.role, user.name);
+      }
+    } catch {}
+
     // Smart role-based dashboard view
     if (user.role === 'coach' || user.role === 'assistant') {
       setActiveTab('coach_dashboard');
@@ -395,9 +402,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // 1. Native Android APK bridge (if running inside our standalone Android app)
     try {
       const nativeBridge = (window as any).AquaTrackNative;
-      if (nativeBridge && typeof nativeBridge.showNotification === 'function') {
-        nativeBridge.showNotification(notif.title, notif.message);
-        return;
+      if (nativeBridge) {
+        if (typeof nativeBridge.markNotificationSeen === 'function') {
+          nativeBridge.markNotificationSeen(notif.id);
+        }
+        if (typeof nativeBridge.showNotification === 'function') {
+          nativeBridge.showNotification(notif.title, notif.message);
+          return;
+        }
       }
     } catch {}
 
