@@ -1198,20 +1198,23 @@ export function approvePayrollRecord(id: string, paymentDate?: string): PayrollR
 }
 
 // ==================== 9. NOTIFICATIONS ====================
-export function getNotifications(role?: string): AppNotification[] {
+export function getNotifications(role?: string, userId?: string): AppNotification[] {
   let query = 'SELECT * FROM notifications';
   const params: any[] = [];
-  if (role && role !== 'all' && role !== 'super_admin') {
+  if (userId && role && role !== 'all' && role !== 'super_admin') {
+    query += ' WHERE (target_user_id = ? OR (target_user_id IS NULL AND target_role IN ("all", ?)))';
+    params.push(userId, role);
+  } else if (role && role !== 'all' && role !== 'super_admin') {
     query += ' WHERE target_role IN ("all", ?)';
     params.push(role);
   }
-  query += ' ORDER BY created_at DESC LIMIT 30';
+  query += ' ORDER BY created_at DESC, id DESC LIMIT 40';
   return db.prepare(query).all(...params) as AppNotification[];
 }
 
 export function createNotification(data: Omit<AppNotification, 'id' | 'is_read' | 'created_at'>): AppNotification {
-  const id = `notif-${Date.now()}`;
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
+  const id = `notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   db.prepare(`
     INSERT INTO notifications (id, target_role, target_user_id, title, message, type, is_read, created_at, link)
     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
@@ -1599,6 +1602,16 @@ export function createTask(data: {
     now
   );
 
+  // Send instant online notification to the assigned staff member / coach
+  createNotification({
+    target_role: assignedUser?.role || 'coach',
+    target_user_id: data.assigned_to_user_id,
+    title: `📋 مهمة جديدة من ${createdUser?.name || 'الـ HR'}: ${data.title}`,
+    message: `${data.description ? data.description + ' — ' : ''}مطلوب تنفيذها (الاستحقاق: ${data.due_date || 'اليوم'})`,
+    type: 'alert',
+    link: 'coach_dashboard',
+  });
+
   return getTasks({ assignedToUserId: data.assigned_to_user_id }).find(t => t.id === id)!;
 }
 
@@ -1616,7 +1629,7 @@ export function updateTaskStatus(
     WHERE id = ?
   `).run(status, coach_notes !== undefined ? coach_notes : null, now, taskId);
 
-  return db.prepare(`
+  const updated = db.prepare(`
     SELECT t.*, 
            u_assigned.name as assigned_to_name, 
            u_created.name as created_by_name
@@ -1625,6 +1638,20 @@ export function updateTaskStatus(
     LEFT JOIN users u_created ON t.created_by_user_id = u_created.id
     WHERE t.id = ?
   `).get(taskId) as Task;
+
+  if (updated) {
+    const statusAr = status === 'completed' ? 'تم الإنجاز ✓' : status === 'in_progress' ? 'قيد التنفيذ ⏳' : 'معلقة';
+    createNotification({
+      target_role: 'hr',
+      target_user_id: updated.created_by_user_id,
+      title: `✅ تحديث مهمة من ${updated.assigned_to_name || 'الكابتن'}`,
+      message: `المهمة "${updated.title}" أصبحت (${statusAr})${coach_notes ? ` — ملاحظة: ${coach_notes}` : ''}`,
+      type: 'info',
+      link: 'hr_dashboard',
+    });
+  }
+
+  return updated;
 }
 
 export function deleteTask(taskId: string): boolean {

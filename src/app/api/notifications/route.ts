@@ -5,7 +5,8 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const role = searchParams.get('role') || undefined;
-    const notifications = getNotifications(role);
+    const userId = searchParams.get('userId') || undefined;
+    const notifications = getNotifications(role, userId);
     return NextResponse.json(notifications);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

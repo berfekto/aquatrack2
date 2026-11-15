@@ -314,7 +314,15 @@ export function Sidebar() {
             </div>
 
             {/* Bottom Coral Pill Button (Matching "Add new appliance" / Logout at bottom of screenshot 2) */}
-            <div className="mt-6 pt-3 flex items-center justify-center gap-3">
+            <div className="mt-6 pt-3 space-y-2.5">
+              <a
+                href="/AquaTrack-Matrouh.apk"
+                download="AquaTrack-Matrouh.apk"
+                className="w-full py-2.5 rounded-full bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs shadow-md flex items-center justify-center gap-2 transition-all"
+              >
+                <span>📲 تحميل تطبيق الأندرويد المستقل (.APK)</span>
+              </a>
+
               <button
                 onClick={() => {
                   setMobileMenuOpen(false);

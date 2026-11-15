@@ -1109,6 +1109,45 @@ export function HRDashboardView() {
               <span>+ تسجيل لاعب جديد بالصورة ورقم واتساب ولي الأمر</span>
             </button>
           </div>
+
+          {/* Standalone Native Android APK Download & WhatsApp Share Banner */}
+          <div
+            className={`mt-5 p-4 rounded-3xl border flex flex-col sm:flex-row items-center justify-between gap-3 ${
+              isDarkTheme
+                ? 'bg-[#2a2c47] border-teal-500/30 text-white'
+                : 'bg-teal-50/80 border-teal-200 text-slate-900'
+            }`}
+          >
+            <div className="text-right space-y-0.5">
+              <div className="font-black text-xs sm:text-sm flex items-center gap-1.5">
+                <span>📲 تطبيق الأندرويد المستقل (.APK) بدون متجر جوجل</span>
+              </div>
+              <p className="text-[11px] opacity-80">
+                حمل ملف الـ APK الرسمي وأرسله على واتساب للموظفين والمدربين ليعمل معهم أونلاين بالإشعارات الفورية
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-center">
+              <a
+                href="/AquaTrack-Matrouh.apk"
+                download="AquaTrack-Matrouh.apk"
+                className="flex-1 sm:flex-none px-4 py-2 rounded-2xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs shadow-md flex items-center justify-center gap-1.5 transition-all"
+              >
+                <span>⬇️ تحميل ملف APK</span>
+              </a>
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(
+                  '📲 حمل تطبيق منظومة أكاديمية السباحة بمطروح المستقل (APK) مباشرة من هنا:\nhttps://aquatrack2.vercel.app/AquaTrack-Matrouh.apk'
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 sm:flex-none px-3.5 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 transition-all"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>إرسال للموظفين واتساب</span>
+              </a>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1425,7 +1464,38 @@ export function HRDashboardView() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const summary = visibleGroups
+                      .map(
+                        g =>
+                          `• مجموعة (${g.days} الساعة ${g.time}): ${g.swimmers
+                            .map(s => `${s.name} [${rollCallState[s.id]?.level || s.level}]`)
+                            .join('، ')}`
+                      )
+                      .join(' | ');
+                    await fetch('/api/notifications', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        target_role: 'coach',
+                        target_user_id: 'user-coach-1',
+                        title: `🏊 إشعار من الـ HR: تدريباتك ومستويات المجاميع (${rollCallDayName})`,
+                        message: summary || 'يرجى مراجعة جدول ومستويات المجاميع للتدريب القادم',
+                        type: 'schedule',
+                        link: 'coach_dashboard',
+                      }),
+                    });
+                    setRollCallSuccessMsg('🔔 تم إرسال إشعار فوري أونلاين لهاتف كابتن أسامة بمواعيد المجاميع ومستويات اللاعبين!');
+                    setTimeout(() => setRollCallSuccessMsg(''), 6000);
+                  }}
+                  className="px-3.5 py-2 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black shadow-md flex items-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <BellRing className="w-4 h-4" />
+                  <span>🔔 إرسال إشعار فوري للمدرب بتدريبات ومستويات المجاميع</span>
+                </button>
                 <span className="text-xs font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-400/30 px-3 py-2 rounded-2xl">
                   ✓ حاضر: {presentTotal}
                 </span>
